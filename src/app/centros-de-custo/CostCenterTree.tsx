@@ -27,7 +27,7 @@ type Row = CostCenterReportRow
  */
 export function CostCenterTree({ rows }: { rows: Row[] }) {
   const [term, setTerm] = React.useState('')
-  const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set())
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set())
   const [showInactive, setShowInactive] = React.useState(false)
 
   const visibleRows = React.useMemo(
@@ -45,7 +45,7 @@ export function CostCenterTree({ rows }: { rows: Row[] }) {
   const searching = term.trim().length > 0
 
   const toggle = (id: string) => {
-    setCollapsed((current) => {
+    setExpanded((current) => {
       const next = new Set(current)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -92,7 +92,7 @@ export function CostCenterTree({ rows }: { rows: Row[] }) {
                 key={node.cost_center_id}
                 node={node}
                 rows={rows}
-                collapsed={collapsed}
+                expanded={expanded}
                 toggle={toggle}
                 forceOpen={searching}
               />
@@ -107,18 +107,18 @@ export function CostCenterTree({ rows }: { rows: Row[] }) {
 function TreeRow({
   node,
   rows,
-  collapsed,
+  expanded,
   toggle,
   forceOpen,
 }: {
   node: TreeNode<Row>
   rows: Row[]
-  collapsed: Set<string>
+  expanded: Set<string>
   toggle: (id: string) => void
   forceOpen: boolean
 }) {
   const hasChildren = node.children.length > 0
-  const isOpen = forceOpen || !collapsed.has(node.cost_center_id)
+  const isOpen = forceOpen || expanded.has(node.cost_center_id)
   const rollup = num(node.rollup_total)
   const direct = num(node.direct_total)
 
@@ -198,7 +198,7 @@ function TreeRow({
               key={child.cost_center_id}
               node={child}
               rows={rows}
-              collapsed={collapsed}
+              expanded={expanded}
               toggle={toggle}
               forceOpen={forceOpen}
             />
