@@ -1,61 +1,161 @@
-'use client'
+import { Eye, EyeOff } from 'lucide-react'
 
-import { useStore } from "@/store/useStore";
-import { useEffect, useState } from "react";
+import { ConfirmActionButton } from '@/components/FormDialog'
+import { PageHeader } from '@/components/PageHeader'
+import { getChannels, getPaymentMethods, getSettings } from '@/lib/data'
+import { cn } from '@/lib/utils'
 
-export default function Configuracoes() {
-  const { settings, updateSettings } = useStore();
-  const [mounted, setMounted] = useState(false);
-  const [target, setTarget] = useState(0);
+import {
+  createChannel,
+  createPaymentMethod,
+  setChannelActive,
+  setPaymentMethodActive,
+} from './actions'
+import { SettingsForm } from './SettingsForm'
+import { SimpleListForm } from './SimpleListForm'
 
-  useEffect(() => {
-    setTarget(settings.breakEvenTarget);
-    setMounted(true);
-  }, [settings.breakEvenTarget]);
+export const dynamic = 'force-dynamic'
 
-  if (!mounted) return null;
-
-  const handleSave = () => {
-    updateSettings({ breakEvenTarget: target });
-    alert("Configurações salvas com sucesso!");
-  };
+export default async function SettingsPage() {
+  const [settings, channels, paymentMethods] = await Promise.all([
+    getSettings(),
+    getChannels(),
+    getPaymentMethods(),
+  ])
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Configurações</h1>
-      </div>
-      <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm space-y-6 max-w-2xl">
-        <div>
-          <h2 className="text-lg font-semibold border-b pb-2 mb-4">Informações do Projeto</h2>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Operação</label>
-          <input 
-            type="text" 
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 bg-gray-100" 
-            value={settings.operationName}
-            readOnly
-          />
-        </div>
-        
-        <div>
-          <h2 className="text-lg font-semibold border-b pb-2 mb-4">Metas Financeiras</h2>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Déficit Inicial (Meta de Break-even em R$)</label>
-          <p className="text-xs text-gray-500 mb-2">Configure o valor inicial que você deseja zerar no indicador 0/50. Mude para 0 se o projeto começar sem dívidas passadas.</p>
-          <input 
-            type="number" 
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" 
-            value={target}
-            onChange={(e) => setTarget(Number(e.target.value))}
-          />
-        </div>
+    <>
+      <PageHeader
+        title="Configurações"
+        description="Parâmetros da operação e cadastros de apoio."
+      />
 
-        <button 
-          onClick={handleSave}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium"
-        >
-          Salvar Configurações
-        </button>
+      <SettingsForm settings={settings} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ListCard
+          title="Canais"
+          description="Onde a venda ou a operação aconteceu."
+          items={channels}
+          toggleAction={setChannelActive}
+          form={
+            <SimpleListForm
+              action={createChannel}
+              title="Novo canal"
+              description="Site, Mercado Livre, Shopee, Amazon, WhatsApp..."
+              triggerLabel="Novo canal"
+              placeholder="Ex.: Shopee"
+            />
+          }
+        />
+
+        <ListCard
+          title="Formas de pagamento"
+          description="Usadas nos lançamentos financeiros."
+          items={paymentMethods}
+          toggleAction={setPaymentMethodActive}
+          form={
+            <SimpleListForm
+              action={createPaymentMethod}
+              title="Nova forma de pagamento"
+              triggerLabel="Nova forma"
+              placeholder="Ex.: Cartão corporativo"
+            />
+          }
+        />
       </div>
-    </div>
-  );
+
+      <section className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+        <h2 className="mb-2 text-sm font-semibold text-foreground">
+          Como o sistema separa os conceitos
+        </h2>
+        <ul className="space-y-1.5">
+          <li>
+            <strong className="text-foreground">Categoria</strong> — o que é esse gasto (Frete,
+            Embalagem, Energia).
+          </li>
+          <li>
+            <strong className="text-foreground">Centro de custo</strong> — qual área consumiu o
+            recurso (Operação Logística &gt; Expedição &gt; Sacolas).
+          </li>
+          <li>
+            <strong className="text-foreground">Fornecedor</strong> — para quem o dinheiro foi
+            pago (Jadlog, Meta, Correios).
+          </li>
+          <li>
+            <strong className="text-foreground">Canal</strong> — onde a venda aconteceu (Site,
+            Shopee, Mercado Livre).
+          </li>
+        </ul>
+        <p className="mt-3 border-t pt-3">
+          Aporte entra no caixa mas não é receita nem resultado. Investimento não é despesa do
+          mês: ele forma o total a recuperar no indicador 0/50, onde 50 é a escala do progresso,
+          nunca um valor em reais.
+        </p>
+      </section>
+    </>
+  )
+}
+
+function ListCard({
+  title,
+  description,
+  items,
+  toggleAction,
+  form,
+}: {
+  title: string
+  description: string
+  items: { id: string; name: string; active: boolean }[]
+  toggleAction: (formData: FormData) => Promise<void>
+  form: React.ReactNode
+}) {
+  return (
+    <section className="rounded-xl border bg-card p-4">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+        {form}
+      </div>
+
+      {items.length === 0 ? (
+        <p className="py-4 text-sm text-muted-foreground">Nada cadastrado ainda.</p>
+      ) : (
+        <ul className="divide-y">
+          {items.map((item) => (
+            <li
+              key={item.id}
+              className={cn(
+                'flex items-center justify-between gap-2 py-1.5 text-sm',
+                !item.active && 'opacity-55',
+              )}
+            >
+              <span>
+                {item.name}
+                {!item.active ? (
+                  <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                    inativo
+                  </span>
+                ) : null}
+              </span>
+              <ConfirmActionButton
+                action={toggleAction}
+                fields={{ id: item.id, active: item.active ? 'false' : 'true' }}
+                label=""
+                size="icon-sm"
+                icon={item.active ? <EyeOff /> : <Eye />}
+                confirmMessage={
+                  item.active
+                    ? `Desativar "${item.name}"? O histórico é preservado.`
+                    : `Reativar "${item.name}"?`
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
 }

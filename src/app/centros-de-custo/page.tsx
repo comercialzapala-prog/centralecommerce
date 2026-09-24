@@ -1,67 +1,83 @@
-'use client'
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { FolderTree, Receipt, TrendingDown } from 'lucide-react'
 
-export default function CentrosDeCusto() {
-  const [centers, setCenters] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+import { GlobalFilterBar } from '@/components/GlobalFilterBar'
+import { MetricCard } from '@/components/MetricCard'
+import { PageHeader } from '@/components/PageHeader'
+import { getCategories, getCostCenterReport, getPaymentMethods, getSuppliers } from '@/lib/data'
+import { describePeriod, parseFilters, type SearchParams } from '@/lib/filters'
+import { formatCurrency, formatNumber, num } from '@/lib/format'
 
-  useEffect(() => {
-    fetchCenters();
-  }, []);
+import { CostCenterTree } from './CostCenterTree'
 
-  async function fetchCenters() {
-    try {
-      const { data, error } = await supabase.from('cost_centers').select('*').order('name');
-      if (error) throw error;
-      setCenters(data || []);
-    } catch (error) {
-      console.error('Error:', error);
-    } finally {
-      setLoading(false);
-    }
-  }
+export const dynamic = 'force-dynamic'
 
-  const rootCenters = centers.filter(c => !c.parent_id);
+export default async function CostCentersPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>
+}) {
+  const params = await searchParams
+  const filters = parseFilters(params)
 
-  const renderTree = (parentId: string | null, depth = 0) => {
-    const children = centers.filter(c => c.parent_id === parentId);
-    if (!children.length) return null;
+  const [rows, categories, suppliers, paymentMethods] = await Promise.all([
+    getCostCenterReport(filters),
+    getCategories(),
+    getSuppliers(),
+    getPaymentMethods(),
+  ])
 
-    return (
-      <div className="space-y-1" style={{ marginLeft: depth > 0 ? '1.5rem' : '0' }}>
-        {children.map(child => (
-          <div key={child.id}>
-            <div className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-lg shadow-sm hover:bg-gray-50 cursor-pointer">
-              <div className="flex items-center gap-2">
-                <span className="text-gray-400">▼</span>
-                <span className="font-medium text-gray-800">{child.name}</span>
-              </div>
-              <div className="flex gap-2">
-                <button className="text-sm text-blue-600 hover:underline">+ Subcentro</button>
-              </div>
-            </div>
-            {renderTree(child.id, depth + 1)}
-          </div>
-        ))}
-      </div>
-    );
-  };
+  const roots = rows.filter((row) => row.depth === 1)
+  const total = roots.reduce((sum, row) => sum + num(row.rollup_total), 0)
+  const entries = roots.reduce((sum, row) => sum + num(row.rollup_count), 0)
+  const biggest = [...roots].sort((a, b) => num(b.rollup_total) - num(a.rollup_total))[0]
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Centros de Custo</h1>
-        <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">+ Novo Centro Raiz</button>
+    <>
+      <PageHeader
+        title="Centros de Custo"
+        description="Qual área da operação consumiu o recurso. Clique em qualquer centro para abrir o drill-down."
+      />
+
+      <GlobalFilterBar
+        fields={['period', 'categoria', 'fornecedor', 'pagamento', 'status']}
+        options={{ categories, suppliers, paymentMethods }}
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricCard
+          title="Gasto total"
+          value={formatCurrency(total)}
+          hint={describePeriod(filters)}
+          tone="negative"
+          icon={TrendingDown}
+        />
+        <MetricCard
+          title="Lançamentos"
+          value={formatNumber(entries)}
+          hint="Saídas alocadas a algum centro"
+          icon={Receipt}
+        />
+        <MetricCard
+          title="Maior centro"
+          value={biggest && num(biggest.rollup_total) > 0 ? biggest.cost_center_name : '--'}
+          hint={
+            biggest && num(biggest.rollup_total) > 0
+              ? formatCurrency(biggest.rollup_total)
+              : 'Nenhum gasto no período'
+          }
+          icon={FolderTree}
+          href={biggest ? `/centros-de-custo/${biggest.cost_center_id}` : undefined}
+        />
       </div>
 
-      <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 shadow-sm min-h-[400px]">
-        {loading ? (
-          <p>Carregando dados do Supabase...</p>
-        ) : (
-          renderTree(null)
-        )}
-      </div>
-    </div>
-  );
+      <CostCenterTree rows={rows} />
+
+      <p className="text-xs text-muted-foreground">
+        O valor de cada linha é o total da subárvore: um gasto lançado em
+        &ldquo;Sacolas&rdquo; aparece somado em &ldquo;Expedição&rdquo; e em &ldquo;Operação
+        Logística&rdquo;, sem duplicar o lançamento. Centros com histórico são desativados, nunca
+        excluídos.
+      </p>
+    </>
+  )
 }

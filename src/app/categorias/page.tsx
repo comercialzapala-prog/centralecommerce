@@ -1,104 +1,113 @@
-'use client'
+import { Eye, EyeOff } from 'lucide-react'
 
-import { useStore, Category } from "@/store/useStore";
-import { useState, useEffect } from "react";
+import { ConfirmActionButton } from '@/components/FormDialog'
+import { EmptyState, PageHeader } from '@/components/PageHeader'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { getCategories } from '@/lib/data'
+import { CATEGORY_TYPES } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
-export default function Categorias() {
-  const { categories, addCategory } = useStore();
-  const [mounted, setMounted] = useState(false);
-  const [isAdding, setIsAdding] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState<Category['type']>('SAIDA');
+import { setCategoryActive } from './actions'
+import { CategoryForm } from './CategoryForm'
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+export const dynamic = 'force-dynamic'
 
-  if (!mounted) return null;
+const TYPE_LABEL: Record<string, string> = {
+  ENTRADA: 'Entrada',
+  SAIDA: 'Saída',
+  APORTE: 'Aporte',
+  ESTORNO: 'Estorno',
+  INVESTIMENTO: 'Investimento',
+}
 
-  const handleSave = () => {
-    if (!newName.trim()) return;
-    addCategory({ name: newName, type: newType, active: true });
-    setNewName("");
-    setIsAdding(false);
-  };
+export default async function CategoriesPage() {
+  const categories = await getCategories()
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Categorias (Centros de Custo)</h1>
-        <button 
-          onClick={() => setIsAdding(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium"
-        >
-          + Nova Categoria
-        </button>
-      </div>
+    <>
+      <PageHeader
+        title="Categorias"
+        description="“O que é esse gasto?” — Frete, Embalagem, Energia, Marketing, Imposto. Não confundir com centro de custo, que responde qual área consumiu."
+        actions={<CategoryForm />}
+      />
 
-      {isAdding && (
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex gap-4 items-end">
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Categoria</label>
-            <input 
-              type="text" 
-              className="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm border p-2" 
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              placeholder="Ex: Aluguel"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-            <select 
-              className="block w-full rounded-md border-gray-300 shadow-sm sm:text-sm border p-2 bg-white"
-              value={newType}
-              onChange={e => setNewType(e.target.value as Category['type'])}
-            >
-              <option value="ENTRADA">ENTRADA (Receitas)</option>
-              <option value="SAIDA">SAÍDA (Despesas/Custos)</option>
-              <option value="INVESTIMENTO">INVESTIMENTO (Inicial)</option>
-              <option value="APORTE">APORTE</option>
-            </select>
-          </div>
-          <button 
-            onClick={handleSave}
-            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium h-[38px]"
-          >
-            Salvar
-          </button>
-          <button 
-            onClick={() => setIsAdding(false)}
-            className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium h-[38px]"
-          >
-            Cancelar
-          </button>
+      {categories.length === 0 ? (
+        <EmptyState title="Nenhuma categoria cadastrada" action={<CategoryForm />} />
+      ) : (
+        <div className="space-y-4">
+          {CATEGORY_TYPES.map((type) => {
+            const group = categories.filter((category) => category.type === type)
+            if (group.length === 0) return null
+
+            return (
+              <section key={type} className="overflow-hidden rounded-xl border bg-card">
+                <h2 className="border-b bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {TYPE_LABEL[type]}
+                  <span className="ml-2 font-normal normal-case">({group.length})</span>
+                </h2>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nome</TableHead>
+                      <TableHead className="w-[110px]">Status</TableHead>
+                      <TableHead className="w-[90px]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {group.map((category) => (
+                      <TableRow
+                        key={category.id}
+                        className={cn(!category.active && 'opacity-55')}
+                      >
+                        <TableCell className="font-medium">{category.name}</TableCell>
+                        <TableCell>
+                          <span
+                            className={cn(
+                              'rounded px-1.5 py-0.5 text-[11px] font-medium',
+                              category.active
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-muted text-muted-foreground',
+                            )}
+                          >
+                            {category.active ? 'Ativa' : 'Inativa'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end">
+                            <CategoryForm category={category} />
+                            <ConfirmActionButton
+                              action={setCategoryActive}
+                              fields={{
+                                id: category.id,
+                                active: category.active ? 'false' : 'true',
+                              }}
+                              label=""
+                              size="icon-sm"
+                              icon={category.active ? <EyeOff /> : <Eye />}
+                              confirmMessage={
+                                category.active
+                                  ? `Desativar "${category.name}"? Ela some dos formulários, mas os lançamentos antigos continuam intactos.`
+                                  : `Reativar "${category.name}"?`
+                              }
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </section>
+            )
+          })}
         </div>
       )}
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nome</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipo</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {categories.map(cat => (
-              <tr key={cat.id}>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{cat.name}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{cat.type}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${cat.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                    {cat.active ? 'Ativo' : 'Inativo'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+    </>
+  )
 }

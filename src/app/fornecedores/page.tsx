@@ -1,42 +1,152 @@
-'use client'
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import Link from 'next/link'
+import { Eye, EyeOff, Receipt, TrendingDown, Truck } from 'lucide-react'
 
-export default function Fornecedores() {
-  const [suppliers, setSuppliers] = useState<any[]>([]);
+import { ConfirmActionButton } from '@/components/FormDialog'
+import { MetricCard } from '@/components/MetricCard'
+import { EmptyState, PageHeader } from '@/components/PageHeader'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { getSupplierStats } from '@/lib/data'
+import { formatCurrency, formatDate, formatNumber, num } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
-  useEffect(() => {
-    const fetchSuppliers = async () => {
-      const { data } = await supabase.from('suppliers').select('*');
-      setSuppliers(data || []);
-    };
-    fetchSuppliers();
-  }, []);
+import { setSupplierActive } from './actions'
+import { SupplierForm } from './SupplierForm'
+
+export const dynamic = 'force-dynamic'
+
+export default async function SuppliersPage() {
+  const suppliers = await getSupplierStats()
+
+  const totalPaid = suppliers.reduce((sum, supplier) => sum + num(supplier.total_paid), 0)
+  const totalEntries = suppliers.reduce((sum, supplier) => sum + num(supplier.entries_count), 0)
+  const active = suppliers.filter((supplier) => supplier.active).length
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Fornecedores</h1>
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Documento</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Pago</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-             {suppliers.length === 0 && <tr><td colSpan={3} className="p-4 text-center">Nenhum fornecedor. Configure o Supabase para carregar os dados reais.</td></tr>}
-             {suppliers.map(s => (
-               <tr key={s.id}>
-                 <td className="px-6 py-4">{s.name}</td>
-                 <td className="px-6 py-4">{s.document}</td>
-                 <td className="px-6 py-4">R$ 0,00</td>
-               </tr>
-             ))}
-          </tbody>
-        </table>
+    <>
+      <PageHeader
+        title="Fornecedores"
+        description="Para quem o dinheiro foi pago."
+        actions={<SupplierForm />}
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <MetricCard
+          title="Total pago"
+          value={formatCurrency(totalPaid)}
+          hint="Todas as saídas com fornecedor"
+          tone="negative"
+          icon={TrendingDown}
+        />
+        <MetricCard
+          title="Lançamentos"
+          value={formatNumber(totalEntries)}
+          icon={Receipt}
+        />
+        <MetricCard
+          title="Fornecedores ativos"
+          value={`${active} de ${suppliers.length}`}
+          icon={Truck}
+        />
       </div>
-    </div>
-  );
+
+      {suppliers.length === 0 ? (
+        <EmptyState
+          title="Nenhum fornecedor cadastrado"
+          description="Cadastre Jadlog, Correios, Meta, fornecedor de caixas... e os pagamentos passam a ser rastreáveis por quem recebeu."
+          action={<SupplierForm />}
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-xl border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Fornecedor</TableHead>
+                <TableHead>Documento</TableHead>
+                <TableHead className="text-right">Total pago</TableHead>
+                <TableHead className="text-right">Lanç.</TableHead>
+                <TableHead className="text-right">Média</TableHead>
+                <TableHead>Último pagamento</TableHead>
+                <TableHead>Principal centro</TableHead>
+                <TableHead className="w-[60px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {suppliers.map((supplier) => (
+                <TableRow
+                  key={supplier.supplier_id}
+                  className={cn(!supplier.active && 'opacity-55')}
+                >
+                  <TableCell>
+                    <Link
+                      href={`/fornecedores/${supplier.supplier_id}`}
+                      className="font-medium hover:underline"
+                    >
+                      {supplier.name}
+                    </Link>
+                    {!supplier.active ? (
+                      <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                        inativo
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {supplier.document ?? '--'}
+                  </TableCell>
+                  <TableCell className="text-right font-medium tabular-nums">
+                    {formatCurrency(supplier.total_paid)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatNumber(supplier.entries_count)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {formatCurrency(supplier.average_amount)}
+                  </TableCell>
+                  <TableCell className="tabular-nums">
+                    {formatDate(supplier.last_payment_date)}
+                  </TableCell>
+                  <TableCell className="max-w-[200px]">
+                    {supplier.top_cost_center_id ? (
+                      <Link
+                        href={`/centros-de-custo/${supplier.top_cost_center_id}`}
+                        className="block truncate text-muted-foreground hover:underline"
+                        title={supplier.top_cost_center_path ?? undefined}
+                      >
+                        {supplier.top_cost_center_name}
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground">--</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <ConfirmActionButton
+                      action={setSupplierActive}
+                      fields={{
+                        id: supplier.supplier_id,
+                        active: supplier.active ? 'false' : 'true',
+                      }}
+                      label=""
+                      size="icon-sm"
+                      icon={supplier.active ? <EyeOff /> : <Eye />}
+                      confirmMessage={
+                        supplier.active
+                          ? `Desativar ${supplier.name}? O histórico de pagamentos é preservado.`
+                          : `Reativar ${supplier.name}?`
+                      }
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </>
+  )
 }
