@@ -122,7 +122,7 @@ export function GlobalFilterBar({
 
         {fields.includes('period') ? (
           <>
-            <Labeled label="Período">
+            <Labeled label="Per\u00edodo">
               <NativeSelect
                 value={period}
                 onChange={(event) => {
@@ -152,7 +152,7 @@ export function GlobalFilterBar({
                     onChange={(event) => push({ period: 'custom', from: event.target.value || null })}
                   />
                 </Labeled>
-                <Labeled label="Até">
+                <Labeled label="At\u00e9">
                   <Input
                     type="date"
                     className="h-9"
@@ -166,21 +166,11 @@ export function GlobalFilterBar({
         ) : null}
 
         {fields.includes('centro') && options.costCenters ? (
-          <Labeled label="Centro de custo" className="min-w-[190px]">
-            <NativeSelect
-              value={current('centro')}
-              onChange={(event) => push({ centro: event.target.value || null })}
-            >
-              <option value="">Todos</option>
-              {options.costCenters
-                .filter((node) => node.path_active)
-                .map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {`${'  '.repeat(Math.max(node.depth - 1, 0))}${node.depth > 1 ? '└ ' : ''}${node.name}`}
-                  </option>
-                ))}
-            </NativeSelect>
-          </Labeled>
+          <CostCenterCascade
+            nodes={options.costCenters}
+            value={current('centro')}
+            onChange={(id) => push({ centro: id || null })}
+          />
         ) : null}
 
         {fields.includes('categoria') && options.categories ? (
@@ -368,5 +358,79 @@ function Labeled({
       </span>
       {children}
     </label>
+  )
+}
+
+/**
+ * Seletor de centro de custo em cascata.
+ *
+ * Primeiro dropdown: apenas centros raiz (depth === 1).
+ * Segundo dropdown: filhos diretos do centro raiz selecionado.
+ *
+ * - Se o usuario seleciona apenas o pai, o filtro aplica na subtree inteira.
+ * - Se seleciona um filho, filtra especificamente naquele filho.
+ */
+function CostCenterCascade({
+  nodes,
+  value,
+  onChange,
+}: {
+  nodes: CostCenterNode[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  const activeNodes = nodes.filter((n) => n.path_active)
+  const roots = activeNodes.filter((n) => n.depth === 1)
+
+  // Descobrir qual raiz esta selecionada (pode ser o proprio root ou um filho dele)
+  const selectedNode = activeNodes.find((n) => n.id === value)
+  const selectedRootId = selectedNode?.root_id ?? ''
+
+  // Filhos diretos do root selecionado (depth === 2 e parent_id === rootId)
+  const children = selectedRootId
+    ? activeNodes.filter((n) => n.parent_id === selectedRootId)
+    : []
+
+  // O valor do segundo dropdown: se o valor atual NAO eh o root, eh um filho
+  const childValue = value && value !== selectedRootId ? value : ''
+
+  return (
+    <>
+      <Labeled label="Centro de custo" className="min-w-[180px]">
+        <NativeSelect
+          value={selectedRootId}
+          onChange={(event) => {
+            // Ao trocar o pai, seleciona a raiz (subtree inteira)
+            onChange(event.target.value)
+          }}
+        >
+          <option value="">Todos</option>
+          {roots.map((node) => (
+            <option key={node.id} value={node.id}>
+              {node.name}
+            </option>
+          ))}
+        </NativeSelect>
+      </Labeled>
+
+      {children.length > 0 && (
+        <Labeled label="Subcentro" className="min-w-[180px]">
+          <NativeSelect
+            value={childValue}
+            onChange={(event) => {
+              // Se limpar, volta pro pai (subtree inteira)
+              onChange(event.target.value || selectedRootId)
+            }}
+          >
+            <option value="">Todos de {roots.find((r) => r.id === selectedRootId)?.name}</option>
+            {children.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.name}
+              </option>
+            ))}
+          </NativeSelect>
+        </Labeled>
+      )}
+    </>
   )
 }
