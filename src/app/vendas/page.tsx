@@ -7,4 +7,4 @@ export default function Vendas() {
       </div>
     </div>
   );
-}\n
+}

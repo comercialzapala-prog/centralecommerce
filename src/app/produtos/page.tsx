@@ -7,4 +7,4 @@ export default function Produtos() {
       </div>
     </div>
   );
-}\n
+}

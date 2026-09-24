@@ -39,4 +39,4 @@ export default function Fornecedores() {
       </div>
     </div>
   );
-}\n
+}
