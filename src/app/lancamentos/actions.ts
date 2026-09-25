@@ -63,15 +63,55 @@ export async function createTransaction(
       return actionError('O valor precisa ser maior que zero.', { amount: 'Valor inválido' })
     }
 
-    const supabase = await createClient()
-    const { error } = await supabase.from('transactions').insert(payload)
+    // Lê o número de parcelas — padrão 1 (lançamento único)
+    const installmentsRaw = Number(formData.get('installments') ?? '1')
+    const installments =
+      Number.isInteger(installmentsRaw) && installmentsRaw >= 2 && installmentsRaw <= 36
+        ? installmentsRaw
+        : 1
 
-    if (error) return actionError(describeDbError(error))
+    const supabase = await createClient()
+
+    if (installments === 1) {
+      // Caminho normal: um único lançamento
+      const { error } = await supabase.from('transactions').insert(payload)
+      if (error) return actionError(describeDbError(error))
+    } else {
+      // Parcelado: cria N lançamentos, um por mês
+      const totalAmount = payload.amount
+      const baseAmount = Math.floor((totalAmount / installments) * 100) / 100
+      // A última parcela absorve os centavos de arredondamento
+      const lastAmount = Math.round((totalAmount - baseAmount * (installments - 1)) * 100) / 100
+
+      const [year, month, day] = payload.transaction_date.split('-').map(Number)
+
+      const rows = Array.from({ length: installments }, (_, i) => {
+        // Avança i meses a partir da data da 1ª parcela
+        const date = new Date(Date.UTC(year, month - 1 + i, day))
+        const dateStr = date.toISOString().slice(0, 10)
+
+        return {
+          ...payload,
+          amount: i === installments - 1 ? lastAmount : baseAmount,
+          transaction_date: dateStr,
+          status: 'PENDENTE' as const,
+          description: `${payload.description} (${i + 1}/${installments})`,
+        }
+      })
+
+      const { error } = await supabase.from('transactions').insert(rows)
+      if (error) return actionError(describeDbError(error))
+    }
 
     revalidateFinance()
-    return actionOk('Lançamento registrado.')
+    return actionOk(
+      installments > 1
+        ? `${installments} parcelas lançadas com sucesso.`
+        : 'Lançamento registrado.',
+    )
   })
 }
+
 
 export async function updateTransaction(
   _prev: ActionState,

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
-import { todayISO } from '@/lib/format'
+import { formatCurrency, todayISO } from '@/lib/format'
 import {
   TRANSACTION_STATUSES,
   TRANSACTION_TYPE_META,
@@ -49,6 +49,8 @@ export function TransactionForm({
 }) {
   const editing = Boolean(transaction)
   const [type, setType] = React.useState<TransactionType>(transaction?.type ?? 'SAIDA')
+  const [installments, setInstallments] = React.useState(1)
+  const [totalAmount, setTotalAmount] = React.useState<number | null>(null)
 
   // Categoria responde "o que e esse gasto" e nao se mistura com centro de
   // custo (secao 2). A lista acompanha o tipo escolhido.
@@ -57,6 +59,12 @@ export function TransactionForm({
   )
 
   const meta = TRANSACTION_TYPE_META[type]
+
+  // Parcelamento só faz sentido em ENTRADA e SAIDA, nunca em edição
+  const canInstall = !editing && (type === 'ENTRADA' || type === 'SAIDA')
+  const isInstalled = canInstall && installments > 1
+  const perInstallment =
+    isInstalled && totalAmount && totalAmount > 0 ? totalAmount / installments : null
 
   return (
     <FormDialog
@@ -73,7 +81,7 @@ export function TransactionForm({
       }
       title={editing ? 'Editar lançamento' : 'Novo lançamento'}
       action={editing ? updateTransaction : createTransaction}
-      submitLabel={editing ? 'Salvar' : 'Lançar'}
+      submitLabel={editing ? 'Salvar' : isInstalled ? `Lançar ${installments}x` : 'Lançar'}
       className="sm:max-w-2xl"
     >
       {transaction ? <input type="hidden" name="id" value={transaction.id} /> : null}
@@ -83,7 +91,10 @@ export function TransactionForm({
           <NativeSelect
             name="type"
             value={type}
-            onChange={(event) => setType(event.target.value as TransactionType)}
+            onChange={(event) => {
+              setType(event.target.value as TransactionType)
+              setInstallments(1)
+            }}
           >
             {TRANSACTION_TYPES.map((item) => (
               <option key={item} value={item}>
@@ -93,14 +104,76 @@ export function TransactionForm({
           </NativeSelect>
         </Field>
 
-        <Field label="Valor" htmlFor="tx-amount">
+        <Field
+          label="Valor total"
+          htmlFor="tx-amount"
+          hint={perInstallment ? `${formatCurrency(perInstallment)} por parcela` : undefined}
+        >
           <MoneyInput
             id="tx-amount"
             name="amount"
             required
             defaultValue={transaction ? String(transaction.amount) : ''}
+            onChange={(raw) => {
+              // MoneyInput devolve a string formatada; converte para número
+              const parsed = parseFloat(raw.replace(/\./g, '').replace(',', '.'))
+              setTotalAmount(Number.isFinite(parsed) ? parsed : null)
+            }}
           />
         </Field>
+
+        {/* Parcelamento — só em novos lançamentos de ENTRADA ou SAIDA */}
+        {canInstall && (
+          <Field
+            label="Parcelado?"
+            hint={
+              isInstalled
+                ? `Serão criados ${installments} lançamentos, 1 por mês, com status Pendente.`
+                : 'Marque para dividir em várias parcelas mensais.'
+            }
+            className="sm:col-span-2"
+          >
+            <div className="flex items-center gap-4">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border"
+                  checked={installments > 1}
+                  onChange={(event) => setInstallments(event.target.checked ? 2 : 1)}
+                />
+                Parcelar
+              </label>
+
+              {installments > 1 && (
+                <div className="flex items-center gap-2">
+                  <NativeSelect
+                    name="installments"
+                    value={String(installments)}
+                    onChange={(event) => setInstallments(Number(event.target.value))}
+                    className="w-28"
+                  >
+                    {Array.from({ length: 35 }, (_, i) => i + 2).map((n) => (
+                      <option key={n} value={String(n)}>
+                        {n}x
+                      </option>
+                    ))}
+                  </NativeSelect>
+                  {perInstallment && (
+                    <span className="text-sm text-muted-foreground">
+                      = {formatCurrency(perInstallment)}/mês
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Garante que installments=1 vai no FormData quando nao parcelado */}
+              {installments <= 1 && <input type="hidden" name="installments" value="1" />}
+            </div>
+          </Field>
+        )}
+
+        {/* Sem parcelamento (edicao ou APORTE/ESTORNO): garante installments=1 */}
+        {!canInstall && <input type="hidden" name="installments" value="1" />}
 
         <Field
           label={type === 'SAIDA' ? 'Centro de custo *' : 'Centro de custo'}
@@ -148,12 +221,20 @@ export function TransactionForm({
             name="description"
             required
             autoComplete="off"
-            placeholder="Ex.: 500 sacolas"
+            placeholder={
+              isInstalled
+                ? 'Ex.: Aluguel  →  será "Aluguel (1/3)", "Aluguel (2/3)"...'
+                : 'Ex.: 500 sacolas'
+            }
             defaultValue={transaction?.description ?? ''}
           />
         </Field>
 
-        <Field label="Data" htmlFor="tx-date">
+        <Field
+          label="Data"
+          htmlFor="tx-date"
+          hint={isInstalled ? '1ª parcela — demais serão mês a mês' : undefined}
+        >
           <Input
             id="tx-date"
             type="date"
@@ -192,15 +273,26 @@ export function TransactionForm({
           </NativeSelect>
         </Field>
 
-        <Field label="Status">
-          <NativeSelect name="status" defaultValue={transaction?.status ?? 'PAGO'}>
-            {TRANSACTION_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </NativeSelect>
-        </Field>
+        {/* Status: parcelado sempre começa PENDENTE; lancamento unico pode ser qualquer status */}
+        {isInstalled ? (
+          <>
+            <input type="hidden" name="status" value="PENDENTE" />
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300 sm:col-span-2">
+              Parcelas criadas com status <strong>Pendente</strong>. Marque cada mês como Pago
+              conforme for pagando.
+            </div>
+          </>
+        ) : (
+          <Field label="Status">
+            <NativeSelect name="status" defaultValue={transaction?.status ?? 'PAGO'}>
+              {TRANSACTION_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+        )}
 
         <Field label="Observações" htmlFor="tx-notes" className="sm:col-span-2">
           <Textarea
