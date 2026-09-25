@@ -42,7 +42,6 @@ import {
   salesByChannel,
   summarizeByStatus,
   summarizeOrders,
-  summarizeTransactions,
 } from '@/lib/finance'
 import { describePeriod, parseFilters, type SearchParams } from '@/lib/filters'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
@@ -77,8 +76,13 @@ export default async function DashboardPage({
   /* ---------------- Financeiro ---------------- */
 
   const snapshot = summarizeByStatus(periodRows)
-  const period = snapshot.combined
-  const lifetime = summarizeTransactions(allRows)
+  // `period` = apenas PAGO — é o que realmente entrou/saiu do caixa no período.
+  // Pendentes ficam só na seção "Compromissos pendentes".
+  const period = snapshot.paid
+  // Acumulado de TODA a vida separado por status: caixa usa só PAGO.
+  const lifetimeSnapshot = summarizeByStatus(allRows)
+  const lifetimePaid = lifetimeSnapshot.paid
+  const lifetime = lifetimeSnapshot.combined
 
   const investmentsPaid = investments
     .filter((item) => item.status === 'PAGO')
@@ -89,13 +93,15 @@ export default async function DashboardPage({
 
   const cash = computeCash({
     initialBalance: num(settings?.initial_balance),
-    transactionCashFlow: lifetime.cashFlow,
+    // Caixa = só PAGO. Pendente pode ser cancelado e nunca movimentou o caixa.
+    transactionCashFlow: lifetimePaid.cashFlow,
     investmentsPaid,
   })
 
   const breakEven = computeBreakEven({
-    accumulatedRevenue: lifetime.revenue,
-    accumulatedExpense: lifetime.expense,
+    // Break-even usa só PAGO: pendente não é lucro até ser confirmado.
+    accumulatedRevenue: lifetimePaid.revenue,
+    accumulatedExpense: lifetimePaid.expense,
     investmentTotal,
   })
 
@@ -207,9 +213,9 @@ export default async function DashboardPage({
             />
             <MetricCard
               title="Resultado projetado"
-              value={formatCurrency(period.operatingResult)}
+              value={formatCurrency(snapshot.combined.operatingResult)}
               hint="Se tudo pendente fosse pago agora"
-              tone={period.operatingResult >= 0 ? 'positive' : 'negative'}
+              tone={snapshot.combined.operatingResult >= 0 ? 'positive' : 'negative'}
               icon={TrendingUp}
             />
             <MetricCard
