@@ -1,5 +1,6 @@
 import { formatNumber } from '@/lib/format'
 import { calculateFullRestock, detectFullProblem } from '@/domain/intelligence'
+import { RESOLVE_PATHS, idleCapitalImpact } from '@/domain/auditor/impact'
 import { finding, productLabel, type AuditFinding, type ProductRule } from '@/domain/auditor/types'
 
 /**
@@ -29,6 +30,9 @@ export const fullRules: ProductRule = ({ insight, params }) => {
     productId: insight.productId,
     resourceType: null,
     resourceId: null,
+    actionHref: RESOLVE_PATHS.produto(insight.productId),
+    sku: insight.sku,
+    channel: 'MERCADO_LIVRE',
   }
 
   if (problems.includes('FULL_QUASE_SEM_ESTOQUE')) {
@@ -77,6 +81,8 @@ export const fullRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'FULL_EXCESS',
         severity: 'IMPORTANTE',
+        // No Full o capital parado ainda paga armazenagem.
+        impact: idleCapitalImpact(insight.full.available, insight),
         title: `Excesso de estoque no Full em ${label}`,
         whatHappened:
           `${label} tem ${formatNumber(insight.full.available)} unidades no Full — ` +
@@ -99,6 +105,7 @@ export const fullRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'FULL_STAGNANT',
         severity: 'IMPORTANTE',
+        impact: idleCapitalImpact(insight.full.available, insight),
         title: `Estoque parado no Full em ${label}`,
         whatHappened:
           `${label} tem ${formatNumber(insight.full.available)} unidades no Full e ` +

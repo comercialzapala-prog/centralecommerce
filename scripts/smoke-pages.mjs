@@ -25,6 +25,7 @@ const env = loadEnv()
 
 /** `expect` = trecho que precisa existir no HTML se a pagina renderizou mesmo. */
 const ROUTES = [
+  { path: '/hoje', expect: 'Hoje' },
   { path: '/dashboard', expect: 'Dashboard' },
   { path: '/lancamentos', expect: 'Lançamentos' },
   { path: '/centros-de-custo', expect: 'Centros de Custo' },
@@ -53,6 +54,9 @@ const ENDPOINTS = [
     expectStatus: [503],
     body: JSON.stringify({ eventId: 'smoke', event: 'product.updated' }),
   },
+  // A execucao do auditor exige sessao. Sem cookie tem de ser 401 -- se virar
+  // 200, qualquer um passa a poder disparar a analise da operacao.
+  { path: '/api/auditor/run', method: 'POST', expectStatus: [401] },
 ]
 
 const FAILURE_MARKERS = [

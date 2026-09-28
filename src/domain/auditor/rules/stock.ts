@@ -1,5 +1,10 @@
 import { formatNumber } from '@/lib/format'
 import { detectStockProblem } from '@/domain/intelligence'
+import {
+  RESOLVE_PATHS,
+  idleCapitalImpact,
+  stockoutImpact,
+} from '@/domain/auditor/impact'
 import { finding, productLabel, type AuditFinding, type ProductRule } from '@/domain/auditor/types'
 
 /**
@@ -30,6 +35,9 @@ export const stockRules: ProductRule = ({ insight, params }) => {
     productId: insight.productId,
     resourceType: null,
     resourceId: null,
+    // Estoque se resolve na ficha do produto: la estao as movimentacoes e o saldo.
+    actionHref: RESOLVE_PATHS.estoque(insight.productId),
+    sku: insight.sku,
   }
 
   if (problems.includes('ESTOQUE_NEGATIVO')) {
@@ -59,6 +67,8 @@ export const stockRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'STOCK_OUT',
         severity: velocity > 0 ? 'CRITICO' : 'IMPORTANTE',
+        // Margem que deixa de entrar ate a reposicao chegar.
+        impact: stockoutImpact(insight, params),
         title: `${label} sem estoque`,
         whatHappened: `Não há unidades disponíveis de ${label} no estoque local.`,
         whyItMatters:
@@ -87,6 +97,7 @@ export const stockRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'STOCK_STOCKOUT_RISK',
         severity: 'CRITICO',
+        impact: stockoutImpact(insight, params),
         title: `Risco de ruptura em ${label}`,
         whatHappened:
           `${label} tem ${formatNumber(insight.local.available)} unidades disponíveis e vende ` +
@@ -145,6 +156,8 @@ export const stockRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'STOCK_EXCESS',
         severity: 'IMPORTANTE',
+        // Capital imobilizado nas unidades que nao vao girar no horizonte.
+        impact: idleCapitalImpact(insight.local.available, insight),
         title: `Estoque excessivo em ${label}`,
         whatHappened:
           `${label} tem ${formatNumber(insight.coverageDays ?? 0)} dias de cobertura — ` +
@@ -172,6 +185,7 @@ export const stockRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'STOCK_STAGNANT',
         severity: 'IMPORTANTE',
+        impact: idleCapitalImpact(insight.local.available, insight),
         title: `${label} com estoque parado`,
         whatHappened:
           days === null

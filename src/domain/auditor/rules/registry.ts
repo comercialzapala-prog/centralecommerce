@@ -1,4 +1,5 @@
 import type { ProductInsight } from '@/domain/intelligence'
+import { RESOLVE_PATHS } from '@/domain/auditor/impact'
 import {
   finding,
   productLabel,
@@ -69,6 +70,10 @@ export const registryRules: ProductRule = ({ insight }) => {
       productId: insight.productId,
       resourceType: null,
       resourceId: null,
+      // Cadastro incompleto nao tem impacto financeiro calculavel: o que falta e
+      // justamente o dado que permitiria calcular.
+      actionHref: RESOLVE_PATHS.produto(insight.productId),
+      sku: insight.sku,
       title: `Cadastro incompleto em ${label}`,
       whatHappened: `${label} está sem ${listToText(missing)}.`,
       whyItMatters: gaps
@@ -123,6 +128,10 @@ export function duplicateSkuRule(insights: ProductInsight[]): AuditFinding[] {
         productId: null,
         resourceType: 'sku',
         resourceId: sku,
+        // Regra global: leva para a lista, nao para um produto -- a correcao
+        // envolve decidir entre dois ou mais.
+        actionHref: RESOLVE_PATHS.produtos(),
+        sku: group[0].sku,
         title: `SKU duplicado: ${group[0].sku}`,
         whatHappened: `${group.length} produtos usam o SKU "${group[0].sku}": ${group
           .map((item) => item.name)

@@ -23,6 +23,12 @@ import type {
   ErpConnectionStatusRow,
   IntegrationQueueHealthRow,
   IntegrationEventRow,
+  AlertRow,
+  AlertStatus,
+  AuditorRunRow,
+  HojeSummaryRow,
+  RecommendationOutcomeRow,
+  RecommendationRow,
 } from '@/lib/types'
 
 /**
@@ -420,4 +426,183 @@ export async function getRecentIntegrationEvents(
     .limit(limit)
 
   return unwrap<IntegrationEventRow>(result as never, 'eventos de integração')
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Painel /hoje (secoes 29, 30 e 31)                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Todas as leituras do /hoje passam pelo client com gate, como o resto do
+ * projeto. Elas recebem `organizationId` explicitamente -- que vem de
+ * `requireMembership()` na pagina -- e ainda filtram por ele na query. A RLS ja
+ * garantiria o isolamento; o filtro explicito e a segunda barreira, e o que evita
+ * um `.limit()` trazer linha de outra organizacao se um dia a policy afrouxar.
+ */
+
+export async function getHojeSummary(organizationId: string): Promise<HojeSummaryRow | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('v_hoje_summary')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .maybeSingle()
+
+  if (error) throw new Error(`Falha ao carregar o resumo de hoje: ${error.message}`)
+  return data as HojeSummaryRow | null
+}
+
+export type AlertQuery = {
+  statuses?: AlertStatus[]
+  severity?: string | null
+  domain?: string | null
+  channel?: string | null
+  /** Corte em ISO aplicado a `last_seen_at`. */
+  since?: string | null
+  limit?: number
+}
+
+const ALERT_COLUMNS =
+  'id,rule_code,domain,severity,product_id,resource_type,resource_id,title,what_happened,' +
+  'why_it_matters,data_points,suggested_action,financial_impact,impact_kind,action_href,' +
+  'sku,channel,status,fingerprint,first_seen_at,last_seen_at,resolved_at'
+
+/**
+ * Alertas na ordem do auditor (secao 30): severidade, depois impacto.
+ *
+ * A ordenacao COMPLETA -- os cinco critérios de `prioritize()` -- roda em
+ * TypeScript sobre esta lista. O `order` do banco resolve os dois primeiros
+ * critérios para que o `limit` corte pelo lado certo; refazer os cinco em SQL
+ * duplicaria a mesma regra em duas linguagens, que e como as duas divergem.
+ *
+ * `severity` ordena alfabeticamente e por sorte isso coincide com a gravidade
+ * (CRITICO < IMPORTANTE < OPORTUNIDADE). Coincidencia nao e contrato, entao quem
+ * decide de verdade e `prioritize()`.
+ */
+export async function getAlerts(
+  organizationId: string,
+  query: AlertQuery = {},
+): Promise<AlertRow[]> {
+  const supabase = await createClient()
+
+  let request = supabase
+    .from('alerts')
+    .select(ALERT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .order('severity', { ascending: true })
+    .order('financial_impact', { ascending: false, nullsFirst: false })
+    .order('last_seen_at', { ascending: false })
+    .limit(query.limit ?? 500)
+
+  if (query.statuses?.length) request = request.in('status', query.statuses)
+  if (query.severity) request = request.eq('severity', query.severity)
+  if (query.domain) request = request.eq('domain', query.domain)
+  if (query.channel) request = request.eq('channel', query.channel)
+  if (query.since) request = request.gte('last_seen_at', query.since)
+
+  const result = await request
+  return unwrap<AlertRow>(result as never, 'alertas')
+}
+
+/** Resolvidos recentemente -- a secao que mostra progresso (secao 30). */
+export async function getResolvedAlerts(organizationId: string, limit = 12): Promise<AlertRow[]> {
+  const supabase = await createClient()
+  const result = await supabase
+    .from('alerts')
+    .select(ALERT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('status', 'RESOLVED')
+    .not('resolved_at', 'is', null)
+    .order('resolved_at', { ascending: false })
+    .limit(limit)
+
+  return unwrap<AlertRow>(result as never, 'alertas resolvidos')
+}
+
+export async function getOpenRecommendations(
+  organizationId: string,
+  limit = 20,
+): Promise<RecommendationRow[]> {
+  const supabase = await createClient()
+  const result = await supabase
+    .from('recommendations')
+    .select(
+      'id,rule_code,product_id,kind,title,reason,current_value,proposed_value,expected_impact,status,created_at',
+    )
+    .eq('organization_id', organizationId)
+    .eq('status', 'OPEN')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  return unwrap<RecommendationRow>(result as never, 'recomendações')
+}
+
+/**
+ * Secao 31: "a recomendacao foi boa?". A tabela sera alimentada por um job que
+ * ainda nao existe, entao a lista vem vazia -- e a tela nao desenha a secao, em
+ * vez de mostrar um quadro vazio sugerindo que algo quebrou.
+ */
+export async function getRecommendationOutcomes(
+  organizationId: string,
+  limit = 10,
+): Promise<RecommendationOutcomeRow[]> {
+  const supabase = await createClient()
+  const result = await supabase
+    .from('recommendation_outcomes')
+    .select(
+      'id,recommendation_id,measured_at,window_days,before_metrics,after_metrics,verdict,notes',
+    )
+    .eq('organization_id', organizationId)
+    .order('measured_at', { ascending: false })
+    .limit(limit)
+
+  return unwrap<RecommendationOutcomeRow>(result as never, 'resultados de recomendação')
+}
+
+export async function getLastAuditorRun(organizationId: string): Promise<AuditorRunRow | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('auditor_runs')
+    .select(
+      'id,started_at,finished_at,reference_date,products_analyzed,findings_total,' +
+        'findings_critical,findings_important,findings_opportunity,auto_resolved,status,error',
+    )
+    .eq('organization_id', organizationId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(`Falha ao carregar a última análise: ${error.message}`)
+  return data as AuditorRunRow | null
+}
+
+/** Quando este usuario marcou o /hoje como revisado nesta organizacao. */
+export async function getLastReviewedAt(
+  organizationId: string,
+  userId: string,
+): Promise<string | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('organization_members')
+    .select('last_reviewed_at')
+    .eq('organization_id', organizationId)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error) throw new Error(`Falha ao carregar o estado de revisão: ${error.message}`)
+  return (data?.last_reviewed_at as string | null) ?? null
+}
+
+/** Canais distintos presentes nos alertas, para popular o filtro. */
+export async function getAlertChannels(organizationId: string): Promise<string[]> {
+  const supabase = await createClient()
+  const result = await supabase
+    .from('alerts')
+    .select('channel')
+    .eq('organization_id', organizationId)
+    .not('channel', 'is', null)
+
+  const rows = unwrap<{ channel: string }>(result as never, 'canais dos alertas')
+  return [...new Set(rows.map((row) => row.channel))].sort()
 }

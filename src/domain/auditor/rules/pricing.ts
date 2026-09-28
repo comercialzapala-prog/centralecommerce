@@ -1,5 +1,6 @@
 import { formatCurrency, formatPercent } from '@/lib/format'
 import { detectMarginProblem, detectPriceProblem, recommendPrice } from '@/domain/intelligence'
+import { RESOLVE_PATHS, marginGapImpact } from '@/domain/auditor/impact'
 import { finding, productLabel, type AuditFinding, type ProductRule } from '@/domain/auditor/types'
 
 /**
@@ -22,6 +23,8 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
     productId: insight.productId,
     resourceType: null,
     resourceId: null,
+    actionHref: RESOLVE_PATHS.produto(insight.productId),
+    sku: insight.sku,
   }
 
   const marginProblems = detectMarginProblem(insight, params)
@@ -39,6 +42,8 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'PRICE_COST_ABOVE_PRICE',
         severity: 'CRITICO',
+        // Perda por unidade x giro x janela de projecao.
+        impact: marginGapImpact(Math.abs(margin.netMargin), insight, params),
         title: `Custo maior que o preço em ${label}`,
         whatHappened:
           `${label} custa ${formatCurrency(margin.unitCost)} e é vendido por ` +
@@ -63,6 +68,7 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'PRICE_NEGATIVE_MARGIN',
         severity: 'CRITICO',
+        impact: marginGapImpact(Math.abs(margin.netMargin), insight, params),
         title: `Margem negativa em ${label}`,
         whatHappened:
           `Ao preço de ${formatCurrency(margin.price)}, ${label} deixa ` +
@@ -92,6 +98,12 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'PRICE_MARGIN_BELOW_MIN',
         severity: 'CRITICO',
+        // Quanto falta de margem, em dinheiro por unidade, para chegar ao minimo.
+        impact: marginGapImpact(
+          ((params.minMarginPercent - margin.netMarginPercent) / 100) * margin.price,
+          insight,
+          params,
+        ),
         title: `Margem abaixo do mínimo em ${label}`,
         whatHappened:
           `${label} está com ${formatPercent(margin.netMarginPercent)} de margem líquida, ` +
@@ -119,6 +131,11 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'PRICE_MARGIN_BELOW_TARGET',
         severity: 'IMPORTANTE',
+        impact: marginGapImpact(
+          ((params.targetMarginPercent - margin.netMarginPercent) / 100) * margin.price,
+          insight,
+          params,
+        ),
         title: `Margem abaixo da meta em ${label}`,
         whatHappened:
           `${label} entrega ${formatPercent(margin.netMarginPercent)} de margem líquida; ` +
@@ -157,6 +174,7 @@ export const pricingRules: ProductRule = ({ insight, params }) => {
           ...base,
           ruleCode: 'PRICE_BELOW_MINIMUM',
           severity: 'IMPORTANTE',
+          impact: marginGapImpact(insight.minimumPrice - margin.price, insight, params),
           title: `Preço abaixo do mínimo em ${label}`,
           whatHappened:
             `${label} está a ${formatCurrency(margin.price)}; o preço mínimo calculado é ` +

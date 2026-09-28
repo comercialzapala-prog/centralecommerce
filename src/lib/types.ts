@@ -346,3 +346,92 @@ export type IntegrationEventRow = {
   processed_at: string | null
   error: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Painel /hoje (secoes 29, 30 e 31)                                           */
+/* -------------------------------------------------------------------------- */
+
+export type AlertStatus = 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED' | 'DISMISSED'
+
+/** Linha de `alerts`. Espelha o AuditFinding depois de persistido. */
+export type AlertRow = {
+  id: string
+  rule_code: string
+  domain: string
+  severity: 'CRITICO' | 'IMPORTANTE' | 'OPORTUNIDADE'
+  product_id: string | null
+  resource_type: string | null
+  resource_id: string | null
+  title: string
+  what_happened: string
+  why_it_matters: string
+  /** Evidencia: os numeros que sustentam o alerta (secao 29). */
+  data_points: Record<string, unknown>
+  suggested_action: string | null
+  /** NULL quando a regra nao tem base para calcular -- nunca zero. */
+  financial_impact: number | string | null
+  impact_kind: string | null
+  action_href: string | null
+  sku: string | null
+  channel: string | null
+  status: AlertStatus
+  fingerprint: string
+  first_seen_at: string
+  last_seen_at: string
+  resolved_at: string | null
+}
+
+/** Linha da view `v_hoje_summary`. */
+export type HojeSummaryRow = {
+  organization_id: string
+  critical_open: number | string
+  important_open: number | string
+  opportunity_open: number | string
+  total_open: number | string
+  stockout_products: number | string
+  impact_at_risk: number | string
+  newest_alert_at: string | null
+  resolved_7d: number | string
+  last_run_at: string | null
+  last_run_status: string | null
+}
+
+export type RecommendationRow = {
+  id: string
+  rule_code: string
+  product_id: string | null
+  kind: 'PRICE' | 'PURCHASE' | 'FULL_RESTOCK' | 'ADS' | 'REGISTRY'
+  title: string
+  reason: string
+  current_value: number | string | null
+  proposed_value: number | string | null
+  expected_impact: Record<string, unknown>
+  status: 'OPEN' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'APPLIED'
+  created_at: string
+}
+
+export type RecommendationOutcomeRow = {
+  id: string
+  recommendation_id: string
+  measured_at: string
+  window_days: number
+  before_metrics: Record<string, unknown>
+  after_metrics: Record<string, unknown>
+  verdict: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'INCONCLUSIVE' | null
+  notes: string | null
+}
+
+export type AuditorRunRow = {
+  id: string
+  started_at: string
+  finished_at: string | null
+  reference_date: string
+  products_analyzed: number
+  findings_total: number
+  findings_critical: number
+  findings_important: number
+  findings_opportunity: number
+  auto_resolved: number
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED'
+  error: string | null
+}

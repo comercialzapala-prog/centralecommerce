@@ -1,4 +1,5 @@
 import type { IntelligenceParams, ProductInsight } from '@/domain/intelligence'
+import type { FinancialImpact, ImpactKind } from '@/domain/auditor/impact'
 
 /**
  * AUDITOR OPERACIONAL (secoes 27, 28, 29 e 30)
@@ -36,6 +37,17 @@ export type AuditFinding = {
   dataPoints: Record<string, unknown>
   suggestedAction: string | null
   /**
+   * Dinheiro em jogo. NULL quando a regra nao tem base para calcular -- e nao
+   * zero, que afirmaria "custa nada". Ver src/domain/auditor/impact.ts.
+   */
+  financialImpact: number | null
+  impactKind: ImpactKind | null
+  /** Tela onde o problema se resolve. */
+  actionHref: string | null
+  /** SKU e canal desnormalizados: a lista do /hoje mostra os dois. */
+  sku: string | null
+  channel: string | null
+  /**
    * Identidade estavel do achado. Enquanto o problema persiste, a mesma regra no
    * mesmo recurso produz o MESMO fingerprint -- e isso que faz o UNIQUE de
    * alerts atualizar `last_seen_at` em vez de criar alerta novo a cada execucao.
@@ -54,10 +66,34 @@ export function buildFingerprint(parts: {
   return `${parts.ruleCode}:${scope}:${target}`
 }
 
-/** Construtor unico: garante fingerprint consistente em todas as regras. */
-export function finding(input: Omit<AuditFinding, 'fingerprint'>): AuditFinding {
+/**
+ * Construtor unico das regras.
+ *
+ * Garante fingerprint consistente e faz os campos opcionais cairem em `null` em
+ * vez de `undefined` -- o que importa porque `null` vai direto para a coluna e
+ * significa "sem valor", enquanto `undefined` viraria "campo ausente" no upsert.
+ *
+ * `impact` entra como objeto para que valor e natureza andem juntos: um numero
+ * sem saber se e risco de receita ou capital parado nao diz nada.
+ */
+export function finding(
+  input: Omit<
+    AuditFinding,
+    'fingerprint' | 'financialImpact' | 'impactKind' | 'sku' | 'channel'
+  > & {
+    impact?: FinancialImpact | null
+    sku?: string | null
+    channel?: string | null
+  },
+): AuditFinding {
+  const { impact, sku, channel, ...rest } = input
+
   return {
-    ...input,
+    ...rest,
+    financialImpact: impact?.amount ?? null,
+    impactKind: impact?.kind ?? null,
+    sku: sku ?? null,
+    channel: channel ?? null,
     fingerprint: buildFingerprint({
       ruleCode: input.ruleCode,
       productId: input.productId,

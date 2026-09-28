@@ -7,6 +7,7 @@ import {
   FolderTree,
   LayoutDashboard,
   Package,
+  Siren,
   PlugZap,
   Receipt,
   Settings as SettingsIcon,
@@ -26,7 +27,12 @@ type NavGroup = { title: string; items: NavItem[] }
 export const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Visão geral',
-    items: [{ href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    items: [
+      // /hoje vem antes do dashboard de proposito: a primeira pergunta do dia e
+      // "o que exige atencao", nao "como vao os numeros".
+      { href: '/hoje', label: 'Hoje', icon: Siren },
+      { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    ],
   },
   {
     title: 'Financeiro',

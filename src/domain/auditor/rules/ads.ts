@@ -1,5 +1,6 @@
 import { formatCurrency, formatNumber, formatPercent } from '@/lib/format'
 import { detectAdsProblem } from '@/domain/intelligence'
+import { RESOLVE_PATHS, wastedSpendImpact } from '@/domain/auditor/impact'
 import { finding, productLabel, type AuditFinding, type ProductRule } from '@/domain/auditor/types'
 
 /**
@@ -26,6 +27,8 @@ export const adsRules: ProductRule = ({ insight, params }) => {
     productId: insight.productId,
     resourceType: null,
     resourceId: null,
+    actionHref: RESOLVE_PATHS.produto(insight.productId),
+    sku: insight.sku,
   }
 
   if (problems.includes('RENTAVEL_SEM_ADS')) {
@@ -64,6 +67,8 @@ export const adsRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'ADS_ROAS_BELOW_BREAKEVEN',
         severity: 'CRITICO',
+        // Perda ja medida no periodo, nao projecao.
+        impact: wastedSpendImpact(Math.abs(Math.min(ads.netResult, 0))),
         title: `ROAS abaixo do break-even em ${label}`,
         whatHappened:
           `${label} está com ROAS de ${formatNumber(ads.roas ?? 0)}x; o break-even é ` +
@@ -92,6 +97,8 @@ export const adsRules: ProductRule = ({ insight, params }) => {
         ...base,
         ruleCode: 'ADS_WITHOUT_STOCK',
         severity: 'CRITICO',
+        // Verba que sera queimada ate a reposicao chegar.
+        impact: wastedSpendImpact(ads.dailySpend * insight.leadDaysUsed),
         title: `Anúncio ativo sem estoque suficiente em ${label}`,
         whatHappened:
           `${label} recebe ${formatCurrency(ads.dailySpend)}/dia em mídia e tem ` +

@@ -1,4 +1,5 @@
 import { formatNumber } from '@/lib/format'
+import { RESOLVE_PATHS } from '@/domain/auditor/impact'
 import { finding, type AuditFinding, type IntegrationHealthInput } from '@/domain/auditor/types'
 
 /**
@@ -42,6 +43,11 @@ export function integrationRules(
     productId: null,
     resourceType: 'erp_connection',
     resourceId: 'BLING',
+    // Integracao nao tem impacto financeiro direto calculavel, mas tem algo pior:
+    // quando ela quebra, TODO numero das outras regras fica desatualizado sem
+    // aviso. Por isso ela vem primeiro na ordenacao (ver DOMAIN_ORDER).
+    actionHref: RESOLVE_PATHS.integracao(),
+    sku: null,
   }
 
   // Integracao que nunca foi configurada nao esta com defeito: esse e o estado

@@ -11,7 +11,7 @@ import { duplicateSkuRule, registryRules } from '@/domain/auditor/rules/registry
 import { stockRules } from '@/domain/auditor/rules/stock'
 import {
   countBySeverity,
-  sortFindings,
+  type AuditDomain,
   type AuditFinding,
   type AuditSeverity,
   type IntegrationHealthInput,
@@ -85,7 +85,9 @@ export function runAuditor(input: AuditorInput): AuditorReport {
     )
   }
 
-  const sorted = sortFindings(findings)
+  // Prioridade documentada em prioritize(). `sortFindings` continua exportado de
+  // types.ts para quem quiser apenas agrupar por severidade, sem os desempates.
+  const sorted = prioritize(findings)
 
   return {
     findings: sorted,
@@ -140,4 +142,105 @@ export function toIntelligenceParams(settings: {
       approvalMaxPercent: settings.priceApprovalMaxPercent,
     },
   }
+}
+
+/* ========================================================================== */
+/* PRIORIDADE (secao 30 -- "o que devo fazer primeiro?")                       */
+/* ========================================================================== */
+
+/**
+ * ORDEM DOS DOMINIOS, quando o desempate chega ate aqui.
+ *
+ * INTEGRACAO vem primeiro e NAO por ser mais grave em dinheiro -- normalmente nem
+ * tem impacto calculavel. Vem primeiro porque, com a integracao quebrada, TODOS os
+ * outros alertas passam a se basear em dado velho. Resolver margem com estoque de
+ * tres dias atras e resolver o problema errado.
+ *
+ * Depois: ESTOQUE (para venda), PRECO (perde dinheiro por venda), FULL (canal),
+ * ADS (verba), CADASTRO (habilita as outras analises, mas nao sangra sozinho).
+ */
+const DOMAIN_ORDER: AuditDomain[] = ['INTEGRACAO', 'ESTOQUE', 'PRECO', 'FULL', 'ADS', 'CADASTRO']
+
+const SEVERITY_RANK: Record<AuditSeverity, number> = {
+  CRITICO: 0,
+  IMPORTANTE: 1,
+  OPORTUNIDADE: 2,
+}
+
+/**
+ * Ordena os achados por prioridade.
+ *
+ * NAO existe score. Nenhum numero e somado, ponderado ou normalizado -- um score
+ * composto ("severidade x 10 + impacto / 1000") pareceria objetivo e seria uma
+ * opiniao disfarcada de calculo, impossivel de explicar para quem olha a lista.
+ *
+ * Em vez disso, criterios em cascata, nesta ordem exata:
+ *
+ *   1. SEVERIDADE. Critico antes de importante antes de oportunidade. Nada
+ *      atravessa esta barreira: oportunidade de R$ 50.000 nao passa na frente de
+ *      um critico de R$ 10, porque critico e "posso perder a venda ou o dinheiro
+ *      agora".
+ *   2. TER IMPACTO CALCULAVEL. Dentro da mesma severidade, quem sabe quanto custa
+ *      vem antes de quem nao sabe. Decidir com numero e melhor do que decidir sem.
+ *   3. MAIOR IMPACTO. Entre os que tem numero, o maior primeiro.
+ *   4. DOMINIO. Entre os que nao tem numero, a ordem de DOMAIN_ORDER acima.
+ *   5. FINGERPRINT. Desempate final estavel, para a lista nao dancar entre duas
+ *      recargas com os mesmos dados.
+ *
+ * Cada passo e verificavel lendo a lista: se dois itens estao fora de ordem, da
+ * para apontar qual criterio foi violado.
+ */
+/**
+ * Forma minima que a ordenacao precisa conhecer.
+ *
+ * Generico de propósito: os mesmos criterios valem para o achado recem-calculado
+ * (`AuditFinding`) e para a linha ja persistida (`AlertRow`, com nomes de coluna).
+ * Uma segunda implementacao para o segundo formato divergiria da primeira no dia
+ * em que alguem mudasse um critério em apenas um dos lugares.
+ */
+export type Prioritizable = {
+  severity: AuditSeverity
+  financialImpact: number | null
+  domain: string
+  fingerprint: string
+}
+
+export function prioritize<T extends Prioritizable>(findings: T[]): T[] {
+  return [...findings].sort((a, b) => {
+    // 1
+    const bySeverity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+    if (bySeverity !== 0) return bySeverity
+
+    // 2
+    const aHasImpact = a.financialImpact !== null
+    const bHasImpact = b.financialImpact !== null
+    if (aHasImpact !== bHasImpact) return aHasImpact ? -1 : 1
+
+    // 3
+    if (aHasImpact && bHasImpact) {
+      const byImpact = (b.financialImpact ?? 0) - (a.financialImpact ?? 0)
+      if (byImpact !== 0) return byImpact
+    }
+
+    // 4
+    const byDomain =
+      DOMAIN_ORDER.indexOf(a.domain as AuditDomain) - DOMAIN_ORDER.indexOf(b.domain as AuditDomain)
+    if (byDomain !== 0) return byDomain
+
+    // 5
+    return a.fingerprint.localeCompare(b.fingerprint)
+  })
+}
+
+/** Explicacao da posicao de um achado, para a interface poder justificar a ordem. */
+export function explainPriority(finding: AuditFinding): string {
+  const parts = [`severidade ${finding.severity.toLowerCase()}`]
+
+  if (finding.financialImpact !== null) {
+    parts.push(`impacto calculado (${finding.impactKind?.toLowerCase().replace('_', ' ')})`)
+  } else {
+    parts.push(`sem impacto calculavel, dominio ${finding.domain.toLowerCase()}`)
+  }
+
+  return parts.join(' · ')
 }
