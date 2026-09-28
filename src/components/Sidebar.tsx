@@ -7,6 +7,7 @@ import {
   FolderTree,
   LayoutDashboard,
   Package,
+  PlugZap,
   Receipt,
   Settings as SettingsIcon,
   ShoppingCart,
@@ -53,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Gestão',
     items: [
       { href: '/categorias', label: 'Categorias', icon: Tags },
+      { href: '/configuracoes/integracoes/bling', label: 'Integrações', icon: PlugZap },
       { href: '/configuracoes', label: 'Configurações', icon: SettingsIcon },
     ],
   },

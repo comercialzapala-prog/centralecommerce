@@ -18,6 +18,9 @@ import type {
   Supplier,
   SupplierStats,
   TransactionRow,
+  ErpConnectionStatusRow,
+  IntegrationQueueHealthRow,
+  IntegrationEventRow,
 } from '@/lib/types'
 
 /**
@@ -360,4 +363,59 @@ export async function getSupplierById(id: string): Promise<SupplierStats | null>
     .maybeSingle()
   if (error) throw new Error(`Falha ao carregar fornecedor: ${error.message}`)
   return data as SupplierStats | null
+}
+
+/* -------------------------------------------------------------------------- */
+/* Integracao com ERP (secoes 4 e 33)                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A interface le SEMPRE do nosso banco, nunca do ERP (secao 4). As tres funcoes
+ * abaixo alimentam o painel de observabilidade e nao disparam nenhuma requisicao
+ * externa -- por isso a tela abre rapido mesmo com o ERP fora do ar.
+ */
+
+export async function getErpConnectionStatus(
+  organizationId: string,
+): Promise<ErpConnectionStatusRow | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('v_erp_connection_status')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('provider', 'BLING')
+    .maybeSingle()
+
+  if (error) throw new Error(`Falha ao carregar status da integração: ${error.message}`)
+  return data as ErpConnectionStatusRow | null
+}
+
+export async function getIntegrationQueueHealth(
+  organizationId: string,
+): Promise<IntegrationQueueHealthRow | null> {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('v_integration_queue_health')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .maybeSingle()
+
+  if (error) throw new Error(`Falha ao carregar a fila da integração: ${error.message}`)
+  return data as IntegrationQueueHealthRow | null
+}
+
+/** Ultimos eventos recebidos. Sem o payload: ele pode ser grande e nao e exibido. */
+export async function getRecentIntegrationEvents(
+  organizationId: string,
+  limit = 20,
+): Promise<IntegrationEventRow[]> {
+  const supabase = await createClient()
+  const result = await supabase
+    .from('integration_events')
+    .select('id,provider,external_event_id,event_type,status,attempts,received_at,processed_at,error')
+    .eq('organization_id', organizationId)
+    .order('received_at', { ascending: false })
+    .limit(limit)
+
+  return unwrap<IntegrationEventRow>(result as never, 'eventos de integração')
 }

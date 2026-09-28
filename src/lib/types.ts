@@ -286,3 +286,63 @@ export type Settings = {
   initial_investment: number | string
   updated_at: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* Integracao com ERP (secoes 12, 33 e 35)                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Linha da view `v_erp_connection_status`.
+ *
+ * A view existe exatamente para que este tipo NAO tenha campo de token: o painel
+ * sabe se existe token e quando expira, nunca o valor.
+ */
+export type ErpConnectionStatusRow = {
+  id: string
+  organization_id: string
+  provider: string
+  status: 'NOT_CONFIGURED' | 'CONNECTED' | 'TOKEN_EXPIRED' | 'ERROR' | 'DISCONNECTED'
+  health: 'UNKNOWN' | 'HEALTHY' | 'DEGRADED' | 'DOWN'
+  external_company_id: string | null
+  scopes: string[]
+  consecutive_failures: number
+  degraded_until: string | null
+  /** Calculado pela view com o `now()` do banco, nao no render. */
+  is_degraded: boolean
+  last_successful_sync: string | null
+  last_reconciliation_at: string | null
+  last_webhook_at: string | null
+  last_error: string | null
+  has_access_token: boolean
+  has_refresh_token: boolean
+  access_token_expires_at: string | null
+  token_expires_in_minutes: number | string | null
+  created_at: string
+  updated_at: string | null
+}
+
+/** Linha da view `v_integration_queue_health`. */
+export type IntegrationQueueHealthRow = {
+  organization_id: string
+  jobs_pending: number | string
+  jobs_processing: number | string
+  jobs_failed: number | string
+  jobs_retrying: number | string
+  oldest_pending_at: string | null
+  events_pending: number | string
+  events_failed: number | string
+  events_today: number | string
+  last_event_at: string | null
+}
+
+export type IntegrationEventRow = {
+  id: string
+  provider: string
+  external_event_id: string
+  event_type: string
+  status: 'PENDING' | 'PROCESSING' | 'PROCESSED' | 'FAILED' | 'DISCARDED'
+  attempts: number
+  received_at: string
+  processed_at: string | null
+  error: string | null
+}
