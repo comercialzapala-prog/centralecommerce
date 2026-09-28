@@ -30,9 +30,18 @@ const ROUTES = [
   { path: '/configuracoes/integracoes/bling', expect: 'Integração com o Bling' },
 ]
 
-/** O webhook precisa responder 503 enquanto estiver desligado (secao 5). */
 const ENDPOINTS = [
+  // GET e só diagnóstico: 200 depois da fundação aplicada, 503 antes dela.
   { path: '/api/webhooks/bling', method: 'GET', expectStatus: [200, 503] },
+  // POST é a recepção de evento. Enquanto webhooks_enabled for false ele TEM de
+  // responder 503 (seção 5: endpoint criado e não ativado). Se um dia isso virar
+  // 202 sem alguém ter ligado a flag de propósito, é regressão de segurança.
+  {
+    path: '/api/webhooks/bling',
+    method: 'POST',
+    expectStatus: [503],
+    body: JSON.stringify({ eventId: 'smoke', event: 'product.updated' }),
+  },
 ]
 
 const FAILURE_MARKERS = [
@@ -83,11 +92,15 @@ async function checkRoute(route) {
 
 async function checkEndpoint(endpoint) {
   try {
-    const response = await fetch(`${BASE}${endpoint.path}`, { method: endpoint.method })
+    const response = await fetch(`${BASE}${endpoint.path}`, {
+      method: endpoint.method,
+      headers: endpoint.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: endpoint.body,
+    })
     const ok = endpoint.expectStatus.includes(response.status)
     if (ok) {
       passed += 1
-      console.log(`   ok      ${endpoint.path.padEnd(38)} ${response.status}`)
+      console.log(`   ok      ${(endpoint.method + " " + endpoint.path).padEnd(38)} ${response.status}`)
     } else {
       failed += 1
       failures.push(`${endpoint.path}: HTTP ${response.status}`)
