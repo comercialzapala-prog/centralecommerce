@@ -32,7 +32,7 @@ import { isIntegrationCryptoConfigured } from '@/integrations/crypto'
 import { getBlingCredentials, getBlingOAuthUrls, getBlingWebhookSecret, hasEndpoint } from '@/integrations/erp/bling/config'
 import { loadIntegrationSettings } from '@/integrations/erp/settings'
 import { resolveProviderName } from '@/integrations/erp/provider'
-import { findCurrentOrganizationId } from '@/integrations/organization'
+import { requireMembership } from '@/lib/auth'
 import { isServiceRoleConfigured } from '@/lib/supabase/admin'
 
 /**
@@ -71,12 +71,11 @@ const MODE_LABEL: Record<string, string> = {
 }
 
 export default async function BlingIntegrationPage() {
-  const organizationId = await findCurrentOrganizationId()
-
-  // A fundacao de integracao ainda nao foi aplicada. Explica o que falta em vez
-  // de estourar 500 -- esta tela e justamente onde se vai olhar quando algo da
-  // integracao nao esta de pe.
-  if (!organizationId) return <FoundationMissing />
+  // A organizacao vem do VINCULO do usuario logado, nao de "a primeira do banco".
+  // E o que continua correto quando existir mais de uma organizacao -- e o que
+  // garante que ninguem ve a integracao de outra empresa.
+  const { membership } = await requireMembership()
+  const organizationId = membership.organizationId
 
   const [connection, queue, events, settings] = await Promise.all([
     getErpConnectionStatus(organizationId),
@@ -307,42 +306,6 @@ export default async function BlingIntegrationPage() {
           </div>
         )}
       </section>
-
-      <p className="text-xs text-muted-foreground">
-        <Link href="/configuracoes" className="underline underline-offset-4">
-          Voltar para Configurações
-        </Link>
-      </p>
-    </>
-  )
-}
-
-/** Estado da tela antes de a migration da fundacao ser aplicada. */
-function FoundationMissing() {
-  return (
-    <>
-      <PageHeader
-        title="Integração com o Bling"
-        description="A fundação de integração ainda não foi aplicada ao banco."
-        actions={<Badge variant="outline">Indisponível</Badge>}
-      />
-
-      <div className="flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
-        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-        <div className="text-sm">
-          <p className="font-medium">Tabelas de integração ausentes.</p>
-          <p className="mt-1 text-muted-foreground">
-            Aplique{' '}
-            <code>supabase/migrations/20260928120000_integration_foundation.sql</code> e recarregue.
-            Nenhuma outra tela depende dessas tabelas — o resto do sistema continua funcionando
-            normalmente.
-          </p>
-          <p className="mt-2 text-muted-foreground">
-            Para conferir o estado atual do banco:{' '}
-            <code>node scripts/db-inspect.mjs</code>
-          </p>
-        </div>
-      </div>
 
       <p className="text-xs text-muted-foreground">
         <Link href="/configuracoes" className="underline underline-offset-4">

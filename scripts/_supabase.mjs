@@ -168,3 +168,75 @@ export async function adminDeleteUser(env, userId) {
     },
   })
 }
+
+/* -------------------------------------------------------------------------- */
+/* Sessao HTTP (usado por test-auth.mjs e smoke-pages.mjs)                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Monta o header Cookie de uma sessao do Supabase.
+ *
+ * Usa os PROPRIOS serializadores do @supabase/ssr em vez de reimplementar o
+ * formato: assim o cookie e byte a byte o que a biblioteca escreveria, e se o
+ * formato mudar numa atualizacao o teste muda junto em vez de passar a mentir.
+ */
+export async function sessionToCookieHeader(env, session) {
+  const { createChunks, stringToBase64URL } = await import('@supabase/ssr')
+
+  const projectRef = new URL(env.NEXT_PUBLIC_SUPABASE_URL).hostname.split('.')[0]
+  const storageKey = `sb-${projectRef}-auth-token`
+  const value = `base64-${stringToBase64URL(JSON.stringify(session))}`
+
+  return createChunks(storageKey, value)
+    .map((chunk) => `${chunk.name}=${encodeURIComponent(chunk.value)}`)
+    .join('; ')
+}
+
+/** Sessao crua do endpoint de token (a forma que o auth-js guarda). */
+export async function signInSession(env, email, password) {
+  const response = await fetch(
+    `${env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/token?grant_type=password`,
+    {
+      method: 'POST',
+      headers: { apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    },
+  )
+  const body = await response.json()
+  if (!response.ok) throw new Error(`login falhou (${response.status}): ${JSON.stringify(body)}`)
+  return body
+}
+
+/**
+ * Cria um usuario de teste JA vinculado a organizacao e devolve o header Cookie
+ * pronto, mais o `cleanup` que apaga o usuario (profile e membership saem por
+ * cascade). Exige service role.
+ */
+export async function createMemberSession(env, tag) {
+  const email = `${tag}@exemplo.invalid`
+  const password = `Teste-${Date.now()}-aA1!`
+  const service = { key: env.SUPABASE_SERVICE_ROLE_KEY }
+
+  const userId = await adminCreateUser(env, email, password)
+
+  const orgRes = await restRaw(env, 'organizations?select=id&limit=1', service)
+  const organizationId = JSON.parse(orgRes.body)?.[0]?.id
+  if (!organizationId) throw new Error('nenhuma organizacao encontrada')
+
+  await restRaw(env, 'organization_members', {
+    ...service,
+    method: 'POST',
+    body: JSON.stringify({ organization_id: organizationId, user_id: userId, role: 'ADMIN' }),
+    headers: { Prefer: 'resolution=merge-duplicates' },
+  })
+
+  const session = await signInSession(env, email, password)
+
+  return {
+    email,
+    userId,
+    organizationId,
+    cookie: await sessionToCookieHeader(env, session),
+    cleanup: () => adminDeleteUser(env, userId),
+  }
+}

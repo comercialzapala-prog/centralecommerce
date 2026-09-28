@@ -1,6 +1,8 @@
 import 'server-only'
 
-import { createClient } from '@/lib/supabase/server'
+// Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
+// O alias mantem os call sites identicos -- o que muda e a garantia.
+import { createAuthedClient as createClient } from '@/lib/auth'
 import type { GlobalFilters } from '@/lib/filters'
 import type {
   Category,

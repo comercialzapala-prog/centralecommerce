@@ -14,7 +14,9 @@ import {
   runAction,
   type ActionState,
 } from '@/lib/actions'
-import { createClient } from '@/lib/supabase/server'
+// Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
+// O alias mantem os call sites identicos -- o que muda e a garantia.
+import { createAuthedClient as createClient } from '@/lib/auth'
 import { STOCK_MOVEMENT_TYPES } from '@/lib/types'
 
 function revalidateStock() {

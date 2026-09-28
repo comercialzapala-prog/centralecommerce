@@ -2,10 +2,20 @@ import type { Metadata } from 'next'
 import { Geist } from 'next/font/google'
 
 import './globals.css'
-import { Sidebar } from '@/components/Sidebar'
-import { Topbar } from '@/components/Topbar'
 import { Toaster } from '@/components/ui/sonner'
 import { cn } from '@/lib/utils'
+
+/**
+ * Layout raiz -- SOMENTE o documento.
+ *
+ * A moldura da aplicacao (sidebar, cabecalho, area de conteudo) mora agora em
+ * `(app)/layout.tsx`. Ela saiu daqui quando o login entrou: o layout raiz envolve
+ * TODAS as rotas, e a tela de login nao pode aparecer dentro da moldura de um
+ * sistema em que a pessoa ainda nao entrou.
+ *
+ * `(app)` e `(auth)` sao grupos de rota: segmentos de organizacao que NAO
+ * aparecem na URL. `/dashboard` continua sendo `/dashboard`.
+ */
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
 
@@ -22,15 +32,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" className={cn('font-sans', geist.variable)}>
       <body className="bg-background text-foreground antialiased">
-        <div className="flex h-dvh overflow-hidden">
-          <Sidebar />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <Topbar />
-            <main className="flex-1 overflow-y-auto p-4 md:p-6">
-              <div className="mx-auto w-full max-w-[1400px] space-y-5">{children}</div>
-            </main>
-          </div>
-        </div>
+        {children}
         <Toaster position="top-right" richColors />
       </body>
     </html>

@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { num } from '@/lib/format'
-import { createClient } from '@/lib/supabase/server'
+import { createInfraClient } from '@/lib/supabase/admin'
 import type { AutomationMode } from '@/integrations/erp/types'
 
 /**
@@ -114,7 +114,8 @@ type SettingsRow = {
 export async function loadIntegrationSettings(
   organizationId: string,
 ): Promise<IntegrationSettings> {
-  const supabase = await createClient()
+  // Infra: BlingProvider carrega isto dentro de job/webhook, sem sessao.
+  const supabase = await createInfraClient()
   const { data, error } = await supabase
     .from('integration_settings')
     .select(COLUMNS)

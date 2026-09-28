@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { createClient } from '@/lib/supabase/server'
+import { createInfraClient } from '@/lib/supabase/admin'
 
 /**
  * ORGANIZACAO CORRENTE (secao 35)
@@ -10,10 +10,19 @@ import { createClient } from '@/lib/supabase/server'
  * fique em UM lugar: quando o login entrar, a troca e aqui -- ler o
  * organization_id do membro autenticado -- e nao em cada consulta.
  *
- * ATENCAO AO CACHE: `cachedId` e cache de MODULO, compartilhado entre requests
- * do mesmo processo. Com uma organizacao e inofensivo. Com duas, o primeiro
- * request aquece o cache e os seguintes recebem a organizacao errada -- remova
- * o cache (ou chaveie por usuario) antes de habilitar multi-tenant.
+ * ESTE MODULO E PARA INFRAESTRUTURA, nao para tela.
+ *
+ * Webhook, jobs e reconciliacao nao tem sessao e precisam resolver "qual
+ * organizacao" sem `auth.uid()`. Por isso ele usa o client de infra.
+ *
+ * A TELA NAO DEVE USAR ISTO. Em Server Component, a organizacao correta vem de
+ * `requireMembership()` em @/lib/auth -- ela sai do vinculo do usuario logado, e
+ * e o que continua correto quando existir mais de uma organizacao.
+ *
+ * ATENCAO AO CACHE: `cachedId` e cache de MODULO, compartilhado entre requests do
+ * mesmo processo. Serve porque a resposta e a mesma para todos (a organizacao da
+ * instalacao, nao a do usuario). Se um dia a infra precisar operar varias
+ * organizacoes, este cache tem de sair.
  */
 
 let cachedId: string | null = null
@@ -28,7 +37,7 @@ const MISSING_TABLE_CODES = new Set(['PGRST205', '42P01'])
 async function resolve(): Promise<{ id: string | null; missingFoundation: boolean }> {
   if (cachedId) return { id: cachedId, missingFoundation: false }
 
-  const supabase = await createClient()
+  const supabase = await createInfraClient()
   const { data, error } = await supabase
     .from('organizations')
     .select('id')

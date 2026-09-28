@@ -52,3 +52,27 @@ export function createAdminClient(): SupabaseClient {
 
   return cached
 }
+
+/**
+ * Client para INFRAESTRUTURA sem sessao de usuario.
+ *
+ * Webhook, fila de jobs e reconciliacao rodam sem ninguem logado -- nao ha cookie
+ * e nao ha `auth.uid()`. Eles precisam ler configuracao (`organizations`,
+ * `integration_settings`) para funcionar, e depois do hardening da RLS essas
+ * leituras exigem `authenticated`.
+ *
+ * Preferencia pela service role, com queda para o client de cookie quando a chave
+ * nao esta configurada. A queda existe para o ambiente de desenvolvimento
+ * continuar funcionando antes de alguem configurar a chave -- e o motivo de ela
+ * ser aceitavel e que hoje `anon` ainda le essas tabelas. Depois do hardening,
+ * sem a service role, esses fluxos passam a falhar de forma explicita, que e
+ * melhor do que ler dado errado.
+ *
+ * NAO use isto para servir dado ao navegador: service role ignora RLS.
+ */
+export async function createInfraClient(): Promise<SupabaseClient> {
+  if (isServiceRoleConfigured()) return createAdminClient()
+
+  const { createClient } = await import('@/lib/supabase/server')
+  return createClient()
+}

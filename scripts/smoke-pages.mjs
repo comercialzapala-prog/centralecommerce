@@ -2,18 +2,26 @@
 /**
  * Smoke de regressao das paginas.
  *
- *   npm run dev            (em outro terminal)
+ *   npm run dev            (ou npm run start, em outro terminal)
  *   node scripts/smoke-pages.mjs
  *
  * Roda antes e depois de uma migration para provar que nada regrediu.
  *
+ * DEPOIS DO LOGIN, ele AUTENTICA. Sem isso toda pagina responderia 307 para
+ * /login e o smoke passaria a medir o redirecionamento em vez do conteudo -- um
+ * teste verde que nao olha mais para o que deveria olhar. Cria um usuario membro
+ * descartavel, usa a sessao dele e apaga no final.
+ *
  * Nao basta conferir HTTP 200: as paginas sao Server Components e o error
- * boundary (src/app/error.tsx) responde 200 com a tela de erro. Por isso o
- * script procura marcas de falha no HTML -- e tambem uma marca de SUCESSO
- * esperada por rota, para nao aprovar uma pagina que devolveu casca vazia.
+ * boundary responde 200 com a tela de erro. Por isso o script procura marcas de
+ * falha no HTML e tambem uma marca de SUCESSO esperada por rota, para nao
+ * aprovar pagina que devolveu casca vazia.
  */
 
+import { createMemberSession, loadEnv } from './_supabase.mjs'
+
 const BASE = process.env.SMOKE_BASE_URL ?? 'http://localhost:3000'
+const env = loadEnv()
 
 /** `expect` = trecho que precisa existir no HTML se a pagina renderizou mesmo. */
 const ROUTES = [
@@ -29,6 +37,9 @@ const ROUTES = [
   { path: '/configuracoes', expect: 'Configurações' },
   { path: '/configuracoes/integracoes/bling', expect: 'Integração com o Bling' },
 ]
+
+/** Rotas publicas: precisam responder SEM sessao. */
+const PUBLIC_ROUTES = [{ path: '/login', expect: 'Entrar' }]
 
 const ENDPOINTS = [
   // GET e só diagnóstico: 200 depois da fundação aplicada, 503 antes dela.
@@ -57,10 +68,13 @@ let passed = 0
 let failed = 0
 const failures = []
 
-async function checkRoute(route) {
+async function checkRoute(route, cookie) {
   let response
   try {
-    response = await fetch(`${BASE}${route.path}`, { redirect: 'follow' })
+    response = await fetch(`${BASE}${route.path}`, {
+      redirect: 'manual',
+      headers: cookie ? { Cookie: cookie } : {},
+    })
   } catch (error) {
     failed += 1
     failures.push(`${route.path}: sem resposta (${error.message})`)
@@ -68,21 +82,28 @@ async function checkRoute(route) {
     return
   }
 
-  const html = await response.text()
   const problems = []
 
-  if (response.status !== 200) problems.push(`HTTP ${response.status}`)
+  // Redirecionamento aqui significa que a sessao nao foi aceita.
+  if (response.status >= 300 && response.status < 400) {
+    problems.push(`redirecionou para ${response.headers.get('location')}`)
+  } else if (response.status !== 200) {
+    problems.push(`HTTP ${response.status}`)
+  }
 
-  const marker = FAILURE_MARKERS.find((needle) => html.includes(needle))
-  if (marker) problems.push(`contem "${marker}"`)
+  const html = problems.length ? '' : await response.text()
 
-  if (route.expect && !html.includes(route.expect)) {
-    problems.push(`nao contem "${route.expect}"`)
+  if (html) {
+    const marker = FAILURE_MARKERS.find((needle) => html.includes(needle))
+    if (marker) problems.push(`contem "${marker}"`)
+    if (route.expect && !html.includes(route.expect)) {
+      problems.push(`nao contem "${route.expect}"`)
+    }
   }
 
   if (problems.length === 0) {
     passed += 1
-    console.log(`   ok      ${route.path.padEnd(38)} ${String(response.status)} ${html.length}b`)
+    console.log(`   ok      ${route.path.padEnd(38)} ${response.status} ${html.length}b`)
   } else {
     failed += 1
     failures.push(`${route.path}: ${problems.join('; ')}`)
@@ -91,44 +112,74 @@ async function checkRoute(route) {
 }
 
 async function checkEndpoint(endpoint) {
+  const label = `${endpoint.method} ${endpoint.path}`
   try {
     const response = await fetch(`${BASE}${endpoint.path}`, {
       method: endpoint.method,
       headers: endpoint.body ? { 'Content-Type': 'application/json' } : undefined,
       body: endpoint.body,
     })
-    const ok = endpoint.expectStatus.includes(response.status)
-    if (ok) {
+    if (endpoint.expectStatus.includes(response.status)) {
       passed += 1
-      console.log(`   ok      ${(endpoint.method + " " + endpoint.path).padEnd(38)} ${response.status}`)
+      console.log(`   ok      ${label.padEnd(38)} ${response.status}`)
     } else {
       failed += 1
-      failures.push(`${endpoint.path}: HTTP ${response.status}`)
-      console.log(`   FALHOU  ${endpoint.path.padEnd(38)} HTTP ${response.status}`)
+      failures.push(`${label}: HTTP ${response.status}`)
+      console.log(`   FALHOU  ${label.padEnd(38)} HTTP ${response.status}`)
     }
   } catch (error) {
     failed += 1
-    failures.push(`${endpoint.path}: ${error.message}`)
-    console.log(`   FALHOU  ${endpoint.path.padEnd(38)} ${error.message}`)
+    failures.push(`${label}: ${error.message}`)
+    console.log(`   FALHOU  ${label.padEnd(38)} ${error.message}`)
   }
 }
 
 async function main() {
-  console.log(`Smoke em ${BASE}\n`)
+  console.log(`Smoke em ${BASE}`)
 
-  // Primeira requisicao compila a rota: o dev server e lento no cold start.
   try {
-    await fetch(`${BASE}/dashboard`)
+    await fetch(`${BASE}/login`)
   } catch {
-    console.error(`Servidor nao responde em ${BASE}. Rode \`npm run dev\` primeiro.`)
+    console.error(`\nServidor nao responde em ${BASE}. Rode \`npm run dev\` primeiro.`)
     process.exit(1)
   }
 
-  console.log('Paginas:')
-  for (const route of ROUTES) await checkRoute(route)
+  let session = null
+  if (env.SUPABASE_SERVICE_ROLE_KEY) {
+    session = await createMemberSession(env, `__smoke_${Date.now()}`)
+    console.log(`Sessao de teste: ${session.email}\n`)
+  } else {
+    console.log('AVISO: sem SUPABASE_SERVICE_ROLE_KEY nao da para autenticar.')
+    console.log('       As paginas protegidas serao verificadas apenas como visitante.\n')
+  }
 
-  console.log('\nEndpoints:')
-  for (const endpoint of ENDPOINTS) await checkEndpoint(endpoint)
+  try {
+    console.log('Publicas:')
+    for (const route of PUBLIC_ROUTES) await checkRoute(route)
+
+    console.log('\nPaginas protegidas:')
+    if (session) {
+      for (const route of ROUTES) await checkRoute(route, session.cookie)
+    } else {
+      for (const route of ROUTES) {
+        const response = await fetch(`${BASE}${route.path}`, { redirect: 'manual' })
+        const ok = response.status >= 300 && response.status < 400
+        if (ok) {
+          passed += 1
+          console.log(`   ok      ${route.path.padEnd(38)} protegida (${response.status})`)
+        } else {
+          failed += 1
+          failures.push(`${route.path}: deveria redirecionar sem sessao, veio ${response.status}`)
+          console.log(`   FALHOU  ${route.path.padEnd(38)} nao protegida (${response.status})`)
+        }
+      }
+    }
+
+    console.log('\nEndpoints:')
+    for (const endpoint of ENDPOINTS) await checkEndpoint(endpoint)
+  } finally {
+    if (session) await session.cleanup()
+  }
 
   console.log(`\n=== ${passed} ok, ${failed} falharam ===`)
   if (failures.length) {

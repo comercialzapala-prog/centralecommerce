@@ -10,7 +10,8 @@
     "test:v2": "node scripts/test-v2.mjs",
     "db:inspect": "node scripts/db-inspect.mjs",
     "test:rls": "node scripts/test-rls.mjs",
-    "smoke": "node scripts/smoke-pages.mjs"
+    "smoke": "node scripts/smoke-pages.mjs",
+    "test:auth": "node scripts/test-auth.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
