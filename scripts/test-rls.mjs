@@ -2,7 +2,7 @@
 /**
  * Testes REAIS de permissao contra o Supabase linkado.
  *
- *   node scripts/test-rls.mjs
+ *   npm run test:rls
  *
  * Roda nos tres estados e SABE em qual esta -- as expectativas mudam com o
  * estado, entao o mesmo arquivo serve de baseline antes e de prova depois:
@@ -11,21 +11,24 @@
  *   FOUNDATION      aplicada; modo aberto da V2 ainda vale para anon
  *   HARDENED        20261005000000_rls_hardening.sql aplicada; anon sem acesso
  *
- * DISTINCAO QUE O SCRIPT FAZ E QUE IMPORTA MAIS QUE TUDO AQUI:
+ * DISTINCAO QUE IMPORTA MAIS QUE TUDO AQUI:
  *
  *   denied  -> o GRANT nao existe. HTTP 401/403. Barreira dura.
  *   empty   -> o grant existe, a RLS filtrou. HTTP 200 com [].
  *
  * Em SELECT a RLS nao levanta erro, ela remove linhas. Um teste que so olhasse
- * "deu erro?" daria como aprovado um vazamento em que a policy esta larga e a
- * tabela simplesmente estava vazia -- e daria como falha um isolamento
- * funcionando. Por isso `empty` e um resultado esperado distinto de `denied`.
+ * "deu erro?" daria como aprovado um vazamento numa tabela que por acaso estava
+ * vazia -- e daria como falha um isolamento funcionando. Por isso `empty` e um
+ * resultado esperado distinto de `denied`.
  *
- * ESCRITAS: o script cria dados marcados com um prefixo unico e apaga tudo no
- * final, inclusive se algum teste falhar. Nao encosta em nada preexistente.
+ * ESCRITAS: tudo que o script cria leva um prefixo unico e e apagado no final,
+ * inclusive quando algum teste falha. Nao encosta em nada preexistente.
  */
 
 import {
+  TABLES_V2,
+  VIEWS_V2,
+  VIEWS_INTEGRATION,
   adminCreateUser,
   adminDeleteUser,
   loadEnv,
@@ -40,26 +43,50 @@ const HAS_SERVICE_ROLE = Boolean(env.SUPABASE_SERVICE_ROLE_KEY)
 const anon = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY }
 const service = { key: env.SUPABASE_SERVICE_ROLE_KEY }
 
+/** As 13 tabelas de negocio (profiles fica de fora: nao tem organization_id). */
+const BUSINESS = TABLES_V2.filter((t) => t !== 'profiles')
+
+const INTEGRATION_TABLES = [
+  'integration_settings',
+  'integration_events',
+  'integration_jobs',
+  'integration_actions',
+  'product_channels',
+  'inventory_balances',
+  'erp_snapshots',
+  'alerts',
+  'recommendations',
+  'recommendation_outcomes',
+]
+
+/** As 5 views que o GlobalSearch consulta direto do navegador. */
+const GLOBAL_SEARCH_VIEWS = [
+  'v_supplier_stats',
+  'v_cost_center_hierarchy',
+  'v_product_stats',
+  'v_order_result',
+  'v_transaction_full',
+]
+
 /* -------------------------------------------------------------------------- */
-/* Classificacao do resultado                                                  */
+/* Classificacao                                                              */
 /* -------------------------------------------------------------------------- */
 
 function classify(res) {
-  if (res.status === 404) {
-    let code = null
+  const code = (() => {
     try {
-      code = JSON.parse(res.body)?.code ?? null
+      return JSON.parse(res.body)?.code ?? null
     } catch {
-      /* corpo nao-JSON */
+      return null
     }
-    if (code === 'PGRST205' || code === '42P01') return 'missing'
-  }
+  })()
+
+  if (res.status === 404 && (code === 'PGRST205' || code === '42P01')) return 'missing'
   if (res.status === 401 || res.status === 403) return 'denied'
   if (res.status === 409) return 'conflict'
+  if (code === '42501') return 'denied'
 
   if (res.status >= 200 && res.status < 300) {
-    // 42501 pode chegar como 400 em algumas rotas.
-    if (res.body.includes('42501')) return 'denied'
     try {
       const parsed = JSON.parse(res.body)
       if (Array.isArray(parsed)) return parsed.length > 0 ? 'rows' : 'empty'
@@ -69,18 +96,11 @@ function classify(res) {
     return 'ok'
   }
 
-  let code = null
-  try {
-    code = JSON.parse(res.body)?.code ?? null
-  } catch {
-    /* ignora */
-  }
-  if (code === '42501') return 'denied'
   return `erro${res.status}${code ? `/${code}` : ''}`
 }
 
 /* -------------------------------------------------------------------------- */
-/* Runner                                                                      */
+/* Runner                                                                     */
 /* -------------------------------------------------------------------------- */
 
 let passed = 0
@@ -100,41 +120,60 @@ function check(label, actual, expected) {
   }
 }
 
+/** Versao silenciosa para as varreduras longas: imprime so o agregado. */
+function tally(results) {
+  const counts = {}
+  for (const value of results) counts[value] = (counts[value] ?? 0) + 1
+  return Object.entries(counts)
+    .map(([k, v]) => `${v}x ${k}`)
+    .join(', ')
+}
+
 function skip(label, why) {
   skipped += 1
   console.log(`   pulado  ${label}  (${why})`)
 }
 
 /* -------------------------------------------------------------------------- */
-/* Deteccao de estado                                                          */
+/* Estado                                                                     */
 /* -------------------------------------------------------------------------- */
 
 async function detectState() {
   const orgs = classify(await restRaw(env, 'organizations?select=id&limit=1', anon))
   if (orgs === 'missing') return 'PRE_FOUNDATION'
-
   const business = classify(await restRaw(env, 'categories?select=id&limit=1', anon))
   return business === 'denied' ? 'HARDENED' : 'FOUNDATION'
 }
 
 /* -------------------------------------------------------------------------- */
-/* Grupos de teste                                                             */
+/* Estado compartilhado                                                       */
 /* -------------------------------------------------------------------------- */
 
-const createdChannels = []
+const cleanupTasks = []
+let orgId = null
+let secondOrgId = null
 
-async function testAnonBusinessTables(state) {
-  console.log('\n1) anon nas tabelas de negocio (SELECT/INSERT/UPDATE/DELETE)')
+/* ========================================================================== */
+/* 1) anon nas tabelas de negocio                                             */
+/* ========================================================================== */
+
+async function testAnonBusiness(state) {
+  console.log('\n1) anon nas 13 tabelas de negocio')
 
   const readExpected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
-  // 'ok' = 204 sem corpo; 'rows' = 201 com Prefer: return=representation.
-  // Os dois significam escrita aceita.
   const writeExpected = state === 'HARDENED' ? 'denied' : ['ok', 'rows']
 
-  check('anon SELECT categories', classify(await restRaw(env, 'categories?select=id&limit=1', anon)), readExpected)
-  check('anon SELECT transactions', classify(await restRaw(env, 'transactions?select=id&limit=1', anon)), readExpected)
+  // SELECT em todas as 13.
+  const reads = []
+  for (const table of BUSINESS) {
+    reads.push(classify(await restRaw(env, `${table}?select=*&limit=1`, anon)))
+  }
+  const allReadsMatch = reads.every((r) =>
+    Array.isArray(readExpected) ? readExpected.includes(r) : r === readExpected,
+  )
+  check(`SELECT nas 13 (${tally(reads)})`, allReadsMatch ? 'conforme' : 'DIVERGENTE', 'conforme')
 
-  // INSERT: prova concreta de escrita publica. Linha marcada e removida depois.
+  // INSERT / UPDATE / DELETE numa tabela de cadastro simples.
   const name = `${TAG} canal`
   const insert = await restRaw(env, 'channels', {
     ...anon,
@@ -147,67 +186,118 @@ async function testAnonBusinessTables(state) {
 
   if (insertResult === 'rows' || insertResult === 'ok') {
     try {
-      const rows = JSON.parse(insert.body)
-      if (Array.isArray(rows) && rows[0]?.id) createdChannels.push(rows[0].id)
+      const id = JSON.parse(insert.body)?.[0]?.id
+      if (id) cleanupTasks.push(() => restRaw(env, `channels?id=eq.${id}`, { ...service, method: 'DELETE' }))
     } catch {
       /* sem representation */
     }
   }
 
-  const id = createdChannels[0]
+  check(
+    'anon UPDATE channels',
+    classify(
+      await restRaw(env, 'channels?active=eq.true', {
+        ...anon,
+        method: 'PATCH',
+        body: JSON.stringify({ active: true }),
+      }),
+    ),
+    writeExpected,
+  )
 
-  if (id) {
-    check(
-      'anon UPDATE channels',
-      classify(
-        await restRaw(env, `channels?id=eq.${id}`, {
-          ...anon,
-          method: 'PATCH',
-          body: JSON.stringify({ name: `${name} editado` }),
+  check(
+    'anon DELETE channels',
+    classify(
+      await restRaw(env, `channels?name=eq.${encodeURIComponent(name)}`, { ...anon, method: 'DELETE' }),
+    ),
+    writeExpected,
+  )
+
+  // INSERT em transactions: a tabela com dado financeiro.
+  check(
+    'anon INSERT transactions',
+    classify(
+      await restRaw(env, 'transactions', {
+        ...anon,
+        method: 'POST',
+        body: JSON.stringify({
+          transaction_date: '2026-01-01',
+          type: 'SAIDA',
+          description: `${TAG} teste`,
+          amount: 1,
+          payment_method: 'PIX',
+          status: 'PAGO',
         }),
-      ),
-      writeExpected,
-    )
+      }),
+    ),
+    writeExpected,
+  )
+}
+
+/* ========================================================================== */
+/* 2) anon nas views e RPCs                                                   */
+/* ========================================================================== */
+
+async function testAnonViewsAndRpc(state) {
+  console.log('\n2) anon nas views e nos RPCs')
+
+  const expected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
+
+  const viewResults = []
+  for (const view of [...VIEWS_V2, ...VIEWS_INTEGRATION]) {
+    viewResults.push(classify(await restRaw(env, `${view}?select=*&limit=1`, anon)))
+  }
+  const ok = viewResults.every((r) => (Array.isArray(expected) ? expected.includes(r) : r === expected))
+  check(`SELECT nas 9 views (${tally(viewResults)})`, ok ? 'conforme' : 'DIVERGENTE', 'conforme')
+
+  // RPC de drill-down: e a porta mais larga do sistema (le v_transaction_full).
+  check(
+    'anon RPC cost_center_report',
+    classify(await restRaw(env, 'rpc/cost_center_report', { ...anon, method: 'POST', body: '{}' })),
+    state === 'HARDENED' ? 'denied' : ['rows', 'empty'],
+  )
+
+  // Os resolvedores de identidade nao podem ser chamados por anon.
+  check(
+    'anon RPC is_org_member',
+    classify(
+      await restRaw(env, 'rpc/is_org_member', {
+        ...anon,
+        method: 'POST',
+        body: JSON.stringify({ p_organization_id: orgId ?? '00000000-0000-0000-0000-000000000000' }),
+      }),
+    ),
+    state === 'HARDENED' ? 'denied' : ['ok', 'rows', 'empty'],
+  )
+
+  check(
+    'anon RPC default_organization_id',
+    classify(await restRaw(env, 'rpc/default_organization_id', { ...anon, method: 'POST', body: '{}' })),
+    state === 'HARDENED' ? 'denied' : ['ok', 'rows', 'empty'],
+  )
+
+  if (state === 'HARDENED') {
     check(
-      'anon DELETE channels',
-      classify(await restRaw(env, `channels?id=eq.${id}`, { ...anon, method: 'DELETE' })),
-      writeExpected,
-    )
-    if (state !== 'HARDENED') createdChannels.length = 0 // o proprio DELETE limpou
-  } else {
-    check(
-      'anon UPDATE channels (sem linha criada)',
-      classify(
-        await restRaw(env, `channels?name=eq.${encodeURIComponent(name)}`, {
-          ...anon,
-          method: 'PATCH',
-          body: JSON.stringify({ active: false }),
-        }),
-      ),
-      writeExpected,
-    )
-    check(
-      'anon DELETE channels (sem linha criada)',
-      classify(
-        await restRaw(env, `channels?name=eq.${encodeURIComponent(name)}`, {
-          ...anon,
-          method: 'DELETE',
-        }),
-      ),
-      writeExpected,
+      'anon RPC current_organization_id',
+      classify(await restRaw(env, 'rpc/current_organization_id', { ...anon, method: 'POST', body: '{}' })),
+      'denied',
     )
   }
 }
 
-async function testErpConnections(state) {
-  console.log('\n2) erp_connections -- a tabela dos segredos')
+/* ========================================================================== */
+/* 3) anon nas tabelas de integracao e nos tokens                             */
+/* ========================================================================== */
+
+async function testAnonIntegration(state) {
+  console.log('\n3) anon nas tabelas de integracao e em erp_connections')
 
   if (state === 'PRE_FOUNDATION') {
-    skip('erp_connections', 'fundacao nao aplicada')
+    skip('tabelas de integracao', 'fundacao nao aplicada')
     return
   }
 
-  // ESTE E O TESTE QUE NAO PODE FALHAR EM NENHUM ESTADO.
+  // ESTES NAO PODEM FALHAR EM NENHUM ESTADO.
   check(
     'anon SELECT access_token_encrypted',
     classify(await restRaw(env, 'erp_connections?select=access_token_encrypted&limit=1', anon)),
@@ -218,68 +308,21 @@ async function testErpConnections(state) {
     classify(await restRaw(env, 'erp_connections?select=refresh_token_encrypted&limit=1', anon)),
     'denied',
   )
-  // select=* precisa falhar tambem: ele inclui as colunas cifradas.
   check(
     'anon SELECT * em erp_connections',
     classify(await restRaw(env, 'erp_connections?select=*&limit=1', anon)),
     'denied',
   )
 
-  const statusExpected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
-  check(
-    'anon SELECT colunas de status',
-    classify(await restRaw(env, 'erp_connections?select=id,status,has_access_token&limit=1', anon)),
-    statusExpected,
-  )
-
-  check(
-    'anon UPDATE erp_connections',
-    classify(
-      await restRaw(env, 'erp_connections?provider=eq.BLING', {
-        ...anon,
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'CONNECTED' }),
-      }),
-    ),
-    'denied',
-  )
-}
-
-async function testViews(state) {
-  console.log('\n3) views')
-
-  const v2Expected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
-  for (const view of ['v_transaction_full', 'v_product_stats', 'v_order_result']) {
-    check(`anon SELECT ${view}`, classify(await restRaw(env, `${view}?select=*&limit=1`, anon)), v2Expected)
+  const readExpected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
+  const reads = []
+  for (const table of INTEGRATION_TABLES) {
+    reads.push(classify(await restRaw(env, `${table}?select=*&limit=1`, anon)))
   }
+  const ok = reads.every((r) => (Array.isArray(readExpected) ? readExpected.includes(r) : r === readExpected))
+  check(`SELECT nas 10 de integracao (${tally(reads)})`, ok ? 'conforme' : 'DIVERGENTE', 'conforme')
 
-  if (state === 'PRE_FOUNDATION') {
-    skip('views de integracao', 'fundacao nao aplicada')
-    return
-  }
-
-  for (const view of ['v_erp_connection_status', 'v_integration_queue_health', 'v_sales_fact']) {
-    check(`anon SELECT ${view}`, classify(await restRaw(env, `${view}?select=*&limit=1`, anon)), v2Expected)
-  }
-
-  // A view de status nao pode expor token nem indiretamente.
-  const res = await restRaw(env, 'v_erp_connection_status?select=*&limit=1', anon)
-  if (classify(res) === 'rows' || classify(res) === 'empty') {
-    const leaks = /access_token_encrypted|refresh_token_encrypted/.test(res.body)
-    check('v_erp_connection_status nao projeta token', leaks ? 'VAZOU' : 'limpo', 'limpo')
-  } else {
-    skip('v_erp_connection_status nao projeta token', 'anon sem acesso a view')
-  }
-}
-
-async function testIntegrationWrites(state) {
-  console.log('\n4) escrita nas tabelas de integracao por anon (deve ser sempre negada)')
-
-  if (state === 'PRE_FOUNDATION') {
-    skip('integration_events / integration_jobs', 'fundacao nao aplicada')
-    return
-  }
-
+  // Escrita em integracao: negada em TODO estado (so service_role escreve).
   check(
     'anon INSERT integration_events',
     classify(
@@ -295,19 +338,17 @@ async function testIntegrationWrites(state) {
     ),
     'denied',
   )
-
   check(
     'anon INSERT integration_jobs',
     classify(
       await restRaw(env, 'integration_jobs', {
         ...anon,
         method: 'POST',
-        body: JSON.stringify({ job_type: 'PROCESS_EVENT', provider: 'BLING' }),
+        body: JSON.stringify({ job_type: 'X', provider: 'BLING' }),
       }),
     ),
     'denied',
   )
-
   check(
     'anon UPDATE integration_jobs',
     classify(
@@ -319,54 +360,46 @@ async function testIntegrationWrites(state) {
     ),
     'denied',
   )
-
   check(
     'anon DELETE integration_events',
-    classify(await restRaw(env, `integration_events?external_event_id=eq.${TAG}`, { ...anon, method: 'DELETE' })),
+    classify(await restRaw(env, `integration_events?event_type=eq.x`, { ...anon, method: 'DELETE' })),
     'denied',
   )
-
-  const readExpected = state === 'HARDENED' ? 'denied' : ['rows', 'empty']
   check(
-    'anon SELECT integration_jobs',
-    classify(await restRaw(env, 'integration_jobs?select=id&limit=1', anon)),
-    readExpected,
+    'anon UPDATE erp_connections',
+    classify(
+      await restRaw(env, 'erp_connections?provider=eq.BLING', {
+        ...anon,
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'CONNECTED' }),
+      }),
+    ),
+    'denied',
   )
 }
 
-const createdEvents = []
-const createdJobs = []
-let orgId = null
+/* ========================================================================== */
+/* 4) service_role                                                            */
+/* ========================================================================== */
 
 async function testServiceRole(state) {
-  console.log('\n5) service_role')
+  console.log('\n4) service_role administra')
 
-  if (!HAS_SERVICE_ROLE) {
-    skip('service_role', 'SUPABASE_SERVICE_ROLE_KEY nao definida')
-    return
-  }
-  if (state === 'PRE_FOUNDATION') {
-    skip('service_role nas tabelas de integracao', 'fundacao nao aplicada')
-    return
-  }
+  if (!HAS_SERVICE_ROLE) return skip('service_role', 'SUPABASE_SERVICE_ROLE_KEY ausente')
+  if (state === 'PRE_FOUNDATION') return skip('service_role', 'fundacao nao aplicada')
 
   const orgRes = await restRaw(env, 'organizations?select=id&limit=1', service)
-  try {
-    orgId = JSON.parse(orgRes.body)?.[0]?.id ?? null
-  } catch {
-    orgId = null
-  }
   check('service_role le organizations', classify(orgRes), 'rows')
+  orgId = JSON.parse(orgRes.body)?.[0]?.id ?? null
 
-  if (!orgId) {
-    skip('escritas com service_role', 'nenhuma organizacao encontrada')
-    return
-  }
-
-  // Token em claro: service role PODE ler. E o unico que pode.
   check(
-    'service_role le access_token_encrypted',
+    'service_role le o token cifrado',
     classify(await restRaw(env, 'erp_connections?select=access_token_encrypted&limit=1', service)),
+    ['rows', 'empty'],
+  )
+  check(
+    'service_role le as 13 de negocio',
+    classify(await restRaw(env, 'transactions?select=id&limit=1', service)),
     ['rows', 'empty'],
   )
 
@@ -379,21 +412,16 @@ async function testServiceRole(state) {
       provider: 'BLING',
       external_event_id: eventId,
       event_type: 'product.updated',
-      payload: { tag: TAG },
     }),
     headers: { Prefer: 'return=representation' },
   })
   check('service_role INSERT integration_events', classify(first), 'rows')
-  try {
-    const id = JSON.parse(first.body)?.[0]?.id
-    if (id) createdEvents.push(id)
-  } catch {
-    /* ignora */
-  }
+  cleanupTasks.push(() =>
+    restRaw(env, `integration_events?external_event_id=eq.${eventId}`, { ...service, method: 'DELETE' }),
+  )
 
-  // Reenvio do MESMO eventId: a constraint tem de recusar (secao 6).
   check(
-    'evento duplicado e recusado pelo UNIQUE',
+    'evento duplicado recusado pelo UNIQUE',
     classify(
       await restRaw(env, 'integration_events', {
         ...service,
@@ -416,224 +444,527 @@ async function testServiceRole(state) {
     resource_type: 'product',
     resource_id: '999',
   }
-  const job = await restRaw(env, 'integration_jobs', {
-    ...service,
-    method: 'POST',
-    body: JSON.stringify(jobBody),
-    headers: { Prefer: 'return=representation' },
-  })
-  check('service_role INSERT integration_jobs', classify(job), 'rows')
-  try {
-    const id = JSON.parse(job.body)?.[0]?.id
-    if (id) createdJobs.push(id)
-  } catch {
-    /* ignora */
-  }
-
-  // Segundo job identico ainda PENDING: o indice parcial tem de recusar (secao 8).
   check(
-    'job pendente duplicado e recusado pelo indice parcial',
+    'service_role INSERT integration_jobs',
     classify(
       await restRaw(env, 'integration_jobs', {
         ...service,
         method: 'POST',
         body: JSON.stringify(jobBody),
+        headers: { Prefer: 'return=representation' },
       }),
+    ),
+    'rows',
+  )
+  cleanupTasks.push(() =>
+    restRaw(env, `integration_jobs?job_type=eq.${TAG}_JOB`, { ...service, method: 'DELETE' }),
+  )
+
+  check(
+    'job pendente duplicado recusado pelo indice parcial',
+    classify(
+      await restRaw(env, 'integration_jobs', { ...service, method: 'POST', body: JSON.stringify(jobBody) }),
     ),
     'conflict',
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/* authenticated + isolamento por organizacao                                  */
-/* -------------------------------------------------------------------------- */
+/* ========================================================================== */
+/* 5) authenticated SEM vinculo                                               */
+/* ========================================================================== */
 
-const createdUsers = []
-let secondOrgId = null
+async function testOutsider(state) {
+  console.log('\n5) authenticated SEM organization_members')
 
-async function testAuthenticatedAndIsolation(state) {
-  console.log('\n6) authenticated e isolamento por organization_id')
+  if (!HAS_SERVICE_ROLE) return skip('authenticated', 'precisa de service role para criar usuario')
+  if (state === 'PRE_FOUNDATION') return skip('authenticated', 'fundacao nao aplicada')
 
-  if (!HAS_SERVICE_ROLE) {
-    skip('authenticated', 'precisa de service role para criar o usuario de teste')
-    return
-  }
-  if (state === 'PRE_FOUNDATION') {
-    skip('authenticated', 'fundacao nao aplicada')
-    return
-  }
-
+  const email = `${TAG}.outsider@exemplo.invalid`
   const password = `Teste-${Date.now()}-aA1!`
-  const memberEmail = `${TAG}.member@exemplo.invalid`
-  const outsiderEmail = `${TAG}.outsider@exemplo.invalid`
+  const userId = await adminCreateUser(env, email, password)
+  cleanupTasks.push(() => adminDeleteUser(env, userId))
 
-  const memberId = await adminCreateUser(env, memberEmail, password)
-  const outsiderId = await adminCreateUser(env, outsiderEmail, password)
-  if (memberId) createdUsers.push(memberId)
-  if (outsiderId) createdUsers.push(outsiderId)
+  const { accessToken } = await signIn(env, email, password)
+  const as = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY, bearer: accessToken }
 
-  if (!orgId) {
-    const orgRes = await restRaw(env, 'organizations?select=id&limit=1', service)
-    try {
-      orgId = JSON.parse(orgRes.body)?.[0]?.id ?? null
-    } catch {
-      orgId = null
-    }
+  // Leitura: o grant existe (authenticated), a RLS filtra -> `empty`.
+  const reads = []
+  for (const table of BUSINESS) {
+    reads.push(classify(await restRaw(env, `${table}?select=*&limit=1`, as)))
   }
-  if (!orgId || !memberId) {
-    skip('authenticated', 'nao foi possivel preparar organizacao/usuario')
-    return
+  const readExpected = state === 'HARDENED' ? ['empty'] : ['rows', 'empty']
+  check(
+    `nao-membro SELECT nas 13 (${tally(reads)})`,
+    reads.every((r) => readExpected.includes(r)) ? 'conforme' : 'DIVERGENTE',
+    'conforme',
+  )
+
+  const viewReads = []
+  for (const view of VIEWS_V2) {
+    viewReads.push(classify(await restRaw(env, `${view}?select=*&limit=1`, as)))
+  }
+  check(
+    `nao-membro nas views de negocio (${tally(viewReads)})`,
+    viewReads.every((r) => readExpected.includes(r)) ? 'conforme' : 'DIVERGENTE',
+    'conforme',
+  )
+
+  check(
+    'nao-membro RPC cost_center_report',
+    classify(await restRaw(env, 'rpc/cost_center_report', { ...as, method: 'POST', body: '{}' })),
+    state === 'HARDENED' ? ['empty'] : ['rows', 'empty'],
+  )
+
+  // ESTE E O TESTE DA PONTE SINGLE-ORG.
+  // current_organization_id() cai na organizacao unica quando nao ha vinculo, e o
+  // INSERT abaixo NAO passa organization_id -- ou seja, o default aponta para a
+  // organizacao principal. Se a ponte fosse um furo, este insert entraria.
+  // O WITH CHECK is_org_member() e o que o barra.
+  check(
+    'nao-membro INSERT sem organization_id (prova que a ponte nao e bypass)',
+    classify(
+      await restRaw(env, 'channels', {
+        ...as,
+        method: 'POST',
+        body: JSON.stringify({ name: `${TAG} invasao` }),
+      }),
+    ),
+    state === 'HARDENED' ? 'denied' : ['ok', 'rows'],
+  )
+
+  // E com organization_id explicito da organizacao principal.
+  if (orgId) {
+    check(
+      'nao-membro INSERT com organization_id explicito',
+      classify(
+        await restRaw(env, 'channels', {
+          ...as,
+          method: 'POST',
+          body: JSON.stringify({ name: `${TAG} invasao2`, organization_id: orgId }),
+        }),
+      ),
+      state === 'HARDENED' ? 'denied' : ['ok', 'rows'],
+    )
   }
 
-  // O membro entra na organizacao; o outsider NAO.
-  await restRaw(env, 'organization_members', {
-    ...service,
-    method: 'POST',
-    body: JSON.stringify({ organization_id: orgId, user_id: memberId, role: 'OWNER' }),
-    headers: { Prefer: 'resolution=merge-duplicates' },
+  // UPDATE que a RLS filtra devolve 204 ("ok"), nao 403: ele casa ZERO linhas.
+  // "ok" aqui nao e permissao, e por isso o teste nao para no status -- ele
+  // confere no banco, com service_role, que nada foi alterado.
+  const marker = `${TAG}-invadido`
+  await restRaw(env, 'transactions?amount=gt.0', {
+    ...as,
+    method: 'PATCH',
+    body: JSON.stringify({ notes: marker }),
   })
-
-  const member = await signIn(env, memberEmail, password)
-  const outsider = await signIn(env, outsiderEmail, password)
-
-  const asMember = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY, bearer: member.accessToken }
-  const asOutsider = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY, bearer: outsider.accessToken }
-
-  check(
-    'membro SELECT categories',
-    classify(await restRaw(env, 'categories?select=id&limit=1', asMember)),
-    ['rows', 'empty'],
+  const touched = JSON.parse(
+    (await restRaw(env, `transactions?select=id&notes=eq.${marker}`, service)).body,
   )
-
-  // ESTE E O TESTE DE ISOLAMENTO. Antes do hardening o outsider ve tudo
-  // (a policy e USING(true)); depois, a RLS filtra e ele ve zero linhas.
   check(
-    'NAO-membro SELECT categories',
-    classify(await restRaw(env, 'categories?select=id&limit=1', asOutsider)),
-    state === 'HARDENED' ? ['empty', 'denied'] : ['rows', 'empty'],
+    'nao-membro UPDATE transactions nao alterou nada',
+    touched.length === 0 ? 'intacto' : `${touched.length} linha(s) ALTERADA(S)`,
+    'intacto',
   )
 
   check(
-    'membro nao le access_token_encrypted',
-    classify(await restRaw(env, 'erp_connections?select=access_token_encrypted&limit=1', asMember)),
+    'nao-membro nao le o token',
+    classify(await restRaw(env, 'erp_connections?select=access_token_encrypted&limit=1', as)),
     'denied',
   )
 
   check(
-    'membro nao escreve em integration_jobs',
+    'nao-membro nao escreve em integration_jobs',
     classify(
       await restRaw(env, 'integration_jobs', {
-        ...asMember,
+        ...as,
         method: 'POST',
-        body: JSON.stringify({ organization_id: orgId, job_type: `${TAG}_AUTH`, provider: 'BLING' }),
+        body: JSON.stringify({ organization_id: orgId, job_type: 'X', provider: 'BLING' }),
       }),
     ),
     'denied',
   )
 
-  // Isolamento entre organizacoes: cria uma segunda org com um alerta dentro e
-  // confirma que o membro da primeira nao alcanca.
-  const secondOrg = await restRaw(env, 'organizations', {
+  // is_org_member tem de responder FALSE para ele, nao erro nem true.
+  const member = await restRaw(env, 'rpc/is_org_member', {
+    ...as,
+    method: 'POST',
+    body: JSON.stringify({ p_organization_id: orgId }),
+  })
+  check('nao-membro is_org_member(org principal)', member.body.trim(), 'false')
+}
+
+/* ========================================================================== */
+/* 6) membro OWNER                                                            */
+/* ========================================================================== */
+
+let ownerAs = null
+
+async function testOwner(state) {
+  console.log('\n6) membro (papel administrativo)')
+
+  if (!HAS_SERVICE_ROLE) return skip('membro', 'precisa de service role')
+  if (state === 'PRE_FOUNDATION') return skip('membro', 'fundacao nao aplicada')
+  if (!orgId) return skip('membro', 'organizacao nao identificada')
+
+  const email = `${TAG}.owner@exemplo.invalid`
+  const password = `Teste-${Date.now()}-aA1!`
+  const userId = await adminCreateUser(env, email, password)
+  cleanupTasks.push(() => adminDeleteUser(env, userId))
+
+  await restRaw(env, 'organization_members', {
+    ...service,
+    method: 'POST',
+    body: JSON.stringify({ organization_id: orgId, user_id: userId, role: 'OWNER' }),
+    headers: { Prefer: 'resolution=merge-duplicates' },
+  })
+
+  const { accessToken } = await signIn(env, email, password)
+  ownerAs = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY, bearer: accessToken }
+
+  const reads = []
+  for (const table of BUSINESS) {
+    reads.push(classify(await restRaw(env, `${table}?select=*&limit=1`, ownerAs)))
+  }
+  check(
+    `membro SELECT nas 13 (${tally(reads)})`,
+    reads.every((r) => ['rows', 'empty'].includes(r)) ? 'conforme' : 'DIVERGENTE',
+    'conforme',
+  )
+
+  // As 5 views do GlobalSearch, que o navegador consulta direto.
+  const searchReads = []
+  for (const view of GLOBAL_SEARCH_VIEWS) {
+    searchReads.push(classify(await restRaw(env, `${view}?select=*&limit=1`, ownerAs)))
+  }
+  check(
+    `membro nas views do GlobalSearch (${tally(searchReads)})`,
+    searchReads.every((r) => ['rows', 'empty'].includes(r)) ? 'conforme' : 'DIVERGENTE',
+    'conforme',
+  )
+
+  check(
+    'membro RPC cost_center_report',
+    classify(await restRaw(env, 'rpc/cost_center_report', { ...ownerAs, method: 'POST', body: '{}' })),
+    ['rows', 'empty'],
+  )
+
+  // Ciclo completo de escrita: INSERT sem informar organization_id (o default
+  // resolve), depois UPDATE e DELETE da propria linha.
+  const created = await restRaw(env, 'channels', {
+    ...ownerAs,
+    method: 'POST',
+    body: JSON.stringify({ name: `${TAG} canal membro` }),
+    headers: { Prefer: 'return=representation' },
+  })
+  check('membro INSERT channels', classify(created), 'rows')
+
+  let createdId = null
+  let createdOrg = null
+  try {
+    const row = JSON.parse(created.body)?.[0]
+    createdId = row?.id
+    createdOrg = row?.organization_id
+  } catch {
+    /* ignora */
+  }
+  if (createdId) {
+    cleanupTasks.push(() =>
+      restRaw(env, `channels?id=eq.${createdId}`, { ...service, method: 'DELETE' }),
+    )
+  }
+
+  check(
+    'default preencheu a organizacao do membro',
+    createdOrg === orgId ? 'correta' : `outra (${createdOrg})`,
+    'correta',
+  )
+
+  if (createdId) {
+    check(
+      'membro UPDATE a propria linha',
+      classify(
+        await restRaw(env, `channels?id=eq.${createdId}`, {
+          ...ownerAs,
+          method: 'PATCH',
+          body: JSON.stringify({ active: false }),
+        }),
+      ),
+      ['ok', 'rows'],
+    )
+    check(
+      'membro DELETE a propria linha',
+      classify(await restRaw(env, `channels?id=eq.${createdId}`, { ...ownerAs, method: 'DELETE' })),
+      ['ok', 'rows'],
+    )
+  }
+
+  // Mesmo sendo OWNER, nao alcanca o token nem escreve na fila.
+  check(
+    'membro NAO le o token',
+    classify(await restRaw(env, 'erp_connections?select=access_token_encrypted&limit=1', ownerAs)),
+    'denied',
+  )
+  check(
+    'membro ve o status da conexao',
+    classify(await restRaw(env, 'v_erp_connection_status?select=status&limit=1', ownerAs)),
+    ['rows', 'empty'],
+  )
+  check(
+    'membro NAO escreve em integration_jobs',
+    classify(
+      await restRaw(env, 'integration_jobs', {
+        ...ownerAs,
+        method: 'POST',
+        body: JSON.stringify({ organization_id: orgId, job_type: 'X', provider: 'BLING' }),
+      }),
+    ),
+    'denied',
+  )
+}
+
+/* ========================================================================== */
+/* 7) isolamento entre organizacoes                                           */
+/* ========================================================================== */
+
+async function testIsolation(state) {
+  console.log('\n7) isolamento multi-tenant (duas organizacoes)')
+
+  if (!HAS_SERVICE_ROLE) return skip('isolamento', 'precisa de service role')
+  if (state === 'PRE_FOUNDATION' || !ownerAs || !orgId) {
+    return skip('isolamento', 'pre-requisitos ausentes')
+  }
+
+  // --- cria a segunda organizacao ---
+  const created = await restRaw(env, 'organizations', {
     ...service,
     method: 'POST',
     body: JSON.stringify({ name: `${TAG} Org 2`, slug: `${TAG}-org2` }),
     headers: { Prefer: 'return=representation' },
   })
-  try {
-    secondOrgId = JSON.parse(secondOrg.body)?.[0]?.id ?? null
-  } catch {
-    secondOrgId = null
-  }
+  secondOrgId = JSON.parse(created.body)?.[0]?.id ?? null
+  check('segunda organizacao criada', secondOrgId ? 'criada' : 'FALHOU', 'criada')
+  if (!secondOrgId) return
 
-  if (!secondOrgId) {
-    skip('isolamento entre organizacoes', 'nao foi possivel criar a segunda organizacao')
-    return
+  // --- dados pertencentes a ela, em tabelas de tipos diferentes ---
+  const seeded = {}
+  for (const [table, body] of [
+    ['channels', { organization_id: secondOrgId, name: `${TAG} canal org2` }],
+    ['categories', { organization_id: secondOrgId, name: `${TAG} cat org2`, type: 'SAIDA' }],
+    ['products', { organization_id: secondOrgId, name: `${TAG} produto org2`, sku: `${TAG}-P2` }],
+    [
+      'transactions',
+      {
+        organization_id: secondOrgId,
+        transaction_date: '2026-01-15',
+        type: 'SAIDA',
+        description: `${TAG} lancamento org2`,
+        amount: 4321.99,
+        payment_method: 'PIX',
+        status: 'PAGO',
+      },
+    ],
+    [
+      'alerts',
+      {
+        organization_id: secondOrgId,
+        rule_code: 'TESTE',
+        domain: 'INTEGRACAO',
+        severity: 'CRITICO',
+        title: `${TAG} alerta org2`,
+        what_happened: 'x',
+        why_it_matters: 'y',
+        fingerprint: `${TAG}-org2`,
+      },
+    ],
+  ]) {
+    const res = await restRaw(env, table, {
+      ...service,
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { Prefer: 'return=representation' },
+    })
+    seeded[table] = classify(res)
+    try {
+      seeded[`${table}_id`] = JSON.parse(res.body)?.[0]?.id
+    } catch {
+      /* ignora */
+    }
   }
+  check(
+    `dados semeados na org 2 (${tally(Object.values(seeded).filter((v) => typeof v === 'string' && !v.includes('-')))})`,
+    ['channels', 'categories', 'products', 'transactions', 'alerts'].every((t) => seeded[t] === 'rows')
+      ? 'semeados'
+      : 'FALHOU',
+    'semeados',
+  )
 
-  await restRaw(env, 'alerts', {
-    ...service,
-    method: 'POST',
-    body: JSON.stringify({
-      organization_id: secondOrgId,
-      rule_code: 'TESTE',
-      domain: 'INTEGRACAO',
-      severity: 'CRITICO',
-      title: `${TAG} alerta da org 2`,
-      what_happened: 'teste',
-      why_it_matters: 'teste',
-      fingerprint: `${TAG}-org2`,
-    }),
+  // A limpeza precisa vir ANTES da organizacao: o FK organization_id das tabelas
+  // de negocio e NO ACTION (nao cascade), ao contrario das de integracao.
+  cleanupTasks.push(async () => {
+    for (const table of ['transactions', 'products', 'categories', 'channels', 'alerts']) {
+      await restRaw(env, `${table}?organization_id=eq.${secondOrgId}`, { ...service, method: 'DELETE' })
+    }
+    await restRaw(env, `organizations?id=eq.${secondOrgId}`, { ...service, method: 'DELETE' })
   })
 
-  const leak = await restRaw(
+  /* --- o membro da org 1 NAO pode enxergar --- */
+
+  const leakReads = []
+  for (const table of ['channels', 'categories', 'products', 'transactions', 'alerts']) {
+    leakReads.push(
+      classify(
+        await restRaw(env, `${table}?select=id&organization_id=eq.${secondOrgId}`, ownerAs),
+      ),
+    )
+  }
+  check(
+    `membro da org 1 lendo dados da org 2 (${tally(leakReads)})`,
+    leakReads.every((r) => r === 'empty' || r === 'denied') ? 'invisiveis' : 'VAZOU',
+    'invisiveis',
+  )
+
+  // Pela view tambem nao: v_transaction_full nao tem organization_id, entao o
+  // filtro depende exclusivamente da RLS da tabela de base. E o teste que pega
+  // vazamento por view.
+  const viaView = await restRaw(
     env,
-    `alerts?select=id&organization_id=eq.${secondOrgId}`,
-    asMember,
+    `v_transaction_full?select=id,description&description=like.*${TAG}*`,
+    ownerAs,
+  )
+  check('membro nao ve o lancamento da org 2 pela view', classify(viaView), 'empty')
+
+  const viaSales = await restRaw(env, `v_sales_fact?select=order_id&limit=100`, ownerAs)
+  check('v_sales_fact acessivel e filtrada', classify(viaSales), ['rows', 'empty'])
+
+  // Nem pelo RPC de drill-down.
+  const rpcRows = await restRaw(env, 'rpc/cost_center_report', {
+    ...ownerAs,
+    method: 'POST',
+    body: JSON.stringify({ p_search: TAG }),
+  })
+  let rpcLeak = 'limpo'
+  try {
+    const rows = JSON.parse(rpcRows.body)
+    if (Array.isArray(rows) && rows.some((r) => Number(r.rollup_total) !== 0)) rpcLeak = 'VAZOU'
+  } catch {
+    /* ignora */
+  }
+  check('RPC cost_center_report nao soma a org 2', rpcLeak, 'limpo')
+
+  /* --- nem alterar --- */
+
+  const updateLeak = await restRaw(env, `channels?organization_id=eq.${secondOrgId}`, {
+    ...ownerAs,
+    method: 'PATCH',
+    body: JSON.stringify({ name: `${TAG} invadido` }),
+  })
+  // A RLS filtra o UPDATE: ele "funciona" e afeta zero linha. A prova de verdade
+  // e conferir que o valor NAO mudou.
+  const afterUpdate = JSON.parse(
+    (await restRaw(env, `channels?select=name&organization_id=eq.${secondOrgId}`, service)).body,
   )
   check(
-    'membro da org 1 NAO ve alerta da org 2',
-    classify(leak),
-    state === 'HARDENED' ? ['empty', 'denied'] : ['rows', 'empty'],
+    'UPDATE cruzado nao alterou nada',
+    afterUpdate.every((r) => !r.name.includes('invadido')) ? 'intacto' : 'ALTERADO',
+    'intacto',
   )
-  if (state !== 'HARDENED' && classify(leak) === 'rows') {
-    console.log('           ^ esperado neste estado: a policy atual e USING(true).')
-  }
+  void updateLeak
+
+  await restRaw(env, `transactions?organization_id=eq.${secondOrgId}`, {
+    ...ownerAs,
+    method: 'DELETE',
+  })
+  const afterDelete = JSON.parse(
+    (await restRaw(env, `transactions?select=id&organization_id=eq.${secondOrgId}`, service)).body,
+  )
+  check(
+    'DELETE cruzado nao apagou nada',
+    afterDelete.length === 1 ? 'intacto' : `${afterDelete.length} linha(s)`,
+    'intacto',
+  )
+
+  // is_org_member da org 2 tem de ser false para o membro da org 1.
+  const memberOfTwo = await restRaw(env, 'rpc/is_org_member', {
+    ...ownerAs,
+    method: 'POST',
+    body: JSON.stringify({ p_organization_id: secondOrgId }),
+  })
+  check('is_org_member(org 2) para membro da org 1', memberOfTwo.body.trim(), 'false')
+
+  /* --- service_role continua administrando --- */
+
+  check(
+    'service_role ve os dados da org 2',
+    classify(
+      await restRaw(env, `transactions?select=id&organization_id=eq.${secondOrgId}`, service),
+    ),
+    'rows',
+  )
+  check(
+    'service_role altera dados da org 2',
+    classify(
+      await restRaw(env, `channels?organization_id=eq.${secondOrgId}`, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({ active: false }),
+      }),
+    ),
+    ['ok', 'rows'],
+  )
 }
 
 /* -------------------------------------------------------------------------- */
-/* Limpeza                                                                     */
+/* Limpeza                                                                    */
 /* -------------------------------------------------------------------------- */
 
 async function cleanup() {
   console.log('\nLimpando...')
-  const client = HAS_SERVICE_ROLE ? service : anon
+  let problems = 0
 
-  try {
-    for (const id of createdJobs) await restRaw(env, `integration_jobs?id=eq.${id}`, { ...client, method: 'DELETE' })
-    for (const id of createdEvents) await restRaw(env, `integration_events?id=eq.${id}`, { ...client, method: 'DELETE' })
-    for (const id of createdChannels) await restRaw(env, `channels?id=eq.${id}`, { ...client, method: 'DELETE' })
-
-    // Sobra de job/evento criados com o TAG mas sem id capturado.
-    if (HAS_SERVICE_ROLE) {
-      await restRaw(env, `integration_jobs?job_type=like.${TAG}*`, { ...service, method: 'DELETE' })
-      await restRaw(env, `integration_events?external_event_id=like.${TAG}*`, { ...service, method: 'DELETE' })
-      await restRaw(env, `channels?name=like.${TAG}*`, { ...service, method: 'DELETE' })
-
-      if (secondOrgId) {
-        // alerts tem FK com on delete cascade para organizations.
-        await restRaw(env, `organizations?id=eq.${secondOrgId}`, { ...service, method: 'DELETE' })
-      }
-      for (const userId of createdUsers) await adminDeleteUser(env, userId)
+  // Ordem inversa: o que foi criado por ultimo sai primeiro.
+  for (const task of cleanupTasks.reverse()) {
+    try {
+      await task()
+    } catch (error) {
+      problems += 1
+      console.error(`  falha numa limpeza: ${error.message}`)
     }
-    console.log('Limpeza concluida.')
-  } catch (error) {
-    console.error(`ATENCAO: a limpeza falhou (${error.message}).`)
-    console.error(`Procure e remova manualmente o que tiver "${TAG}".`)
   }
+
+  if (HAS_SERVICE_ROLE) {
+    // Varredura final por qualquer sobra com o TAG.
+    for (const table of ['channels', 'categories', 'products', 'transactions']) {
+      await restRaw(env, `${table}?name=like.*${TAG}*`, { ...service, method: 'DELETE' }).catch(() => {})
+    }
+    await restRaw(env, `transactions?description=like.*${TAG}*`, { ...service, method: 'DELETE' }).catch(() => {})
+    await restRaw(env, `organizations?slug=like.*${TAG}*`, { ...service, method: 'DELETE' }).catch(() => {})
+  }
+
+  console.log(problems === 0 ? 'Limpeza concluida.' : `Limpeza com ${problems} problema(s) -- procure por "${TAG}".`)
 }
 
 /* -------------------------------------------------------------------------- */
 
 async function main() {
   console.log(`Projeto: ${env.NEXT_PUBLIC_SUPABASE_URL}`)
-  console.log(`Service role: ${HAS_SERVICE_ROLE ? 'disponivel' : 'AUSENTE (parte dos testes sera pulada)'}`)
+  console.log(`Service role: ${HAS_SERVICE_ROLE ? 'disponivel' : 'AUSENTE (parte sera pulada)'}`)
 
   const state = await detectState()
   console.log(`Estado detectado: ${state}\n`)
 
   if (state === 'FOUNDATION') {
     console.log('AVISO: neste estado anon ainda escreve nas tabelas de negocio.')
-    console.log('       Os testes abaixo CONFIRMAM esse risco em vez de reprova-lo.')
-    console.log('       Aplique supabase/pending/20261005000000_rls_hardening.sql para fechar.\n')
+    console.log('       Os testes CONFIRMAM esse risco em vez de reprova-lo.\n')
   }
 
   try {
-    await testAnonBusinessTables(state)
-    await testErpConnections(state)
-    await testViews(state)
-    await testIntegrationWrites(state)
+    // service_role primeiro: ele descobre o orgId que os outros grupos usam.
     await testServiceRole(state)
-    await testAuthenticatedAndIsolation(state)
+    await testAnonBusiness(state)
+    await testAnonViewsAndRpc(state)
+    await testAnonIntegration(state)
+    await testOutsider(state)
+    await testOwner(state)
+    await testIsolation(state)
   } catch (error) {
     failed += 1
     failures.push(`erro inesperado: ${error.message}`)

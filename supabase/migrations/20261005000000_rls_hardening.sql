@@ -383,24 +383,148 @@ grant execute on function cost_center_report(date, date, uuid, uuid, uuid, uuid,
     to authenticated, service_role;
 
 -- ============================================================================
--- 9. TRAVA CONTRA REGRESSAO
---    Se alguem reaplicar o modo aberto por engano, este bloco denuncia na hora.
+-- 9. TODA VIEW PASSA A SER security_invoker
+--
+--    Nao basta verificar: aqui se GARANTE. View definer roda com a permissao do
+--    dono e ignora a RLS das tabelas de base -- e o jeito mais facil de furar
+--    tudo o que esta acima sem ninguem notar, porque a view continua "funcionando".
+--
+--    Enforcar antes de assertar tambem evita que a migration aborte por causa de
+--    uma view antiga criada sem a opcao.
+-- ============================================================================
+do $views_invoker$
+declare
+    v record;
+begin
+    for v in
+        select table_name from information_schema.views where table_schema = 'public'
+    loop
+        execute format('alter view %I set (security_invoker = true)', v.table_name);
+    end loop;
+end $views_invoker$;
+
+-- ============================================================================
+-- 9b. REDE DE SEGURANCA: anon perde TUDO em public, de uma vez
+--
+--     As secoes acima revogam tabela por tabela. Este bloco nao confia nessa
+--     enumeracao: se um objeto novo tiver escapado da lista, ele cai aqui. A
+--     afirmacao "anon nao acessa dado de negocio" passa a valer por construcao, e
+--     nao por eu ter lembrado de listar tudo.
+-- ============================================================================
+revoke all on all tables in schema public from anon;
+revoke all on all routines in schema public from anon;
+revoke all on all sequences in schema public from anon;
+
+-- Tabela criada DEPOIS desta migration nao deve nascer acessivel a anon.
+-- Ressalva honesta: ALTER DEFAULT PRIVILEGES so afeta os defaults definidos pelo
+-- papel que roda o comando. Se o grant original do Supabase foi definido por
+-- outro papel (supabase_admin), esta linha e inofensiva e nao surte efeito -- por
+-- isso a assercao (c) abaixo continua sendo a verificacao que vale.
+alter default privileges in schema public revoke all on tables from anon;
+
+-- ============================================================================
+-- 10. TRAVA CONTRA REGRESSAO -- ASSERCOES DURAS
+--
+--     Este bloco e a PROVA da migration. Qualquer invariante violada levanta
+--     excecao e a transacao inteira volta atras: nao existe estado
+--     "parcialmente endurecido".
 -- ============================================================================
 do $verify$
 declare
-    v_anon_policies int;
+    v_business constant text[] := array[
+        'categories','subcategories','transactions','investments','settings',
+        'cost_centers','suppliers','products','orders','order_items',
+        'stock_movements','channels','payment_methods'
+    ];
+    v_count int;
+    v_list  text;
 begin
-    select count(*) into v_anon_policies
+    -- (a) Nenhuma policy aceita anon, em tabela nenhuma do schema public.
+    select count(*), string_agg(format('%s.%s', tablename, policyname), ', ')
+      into v_count, v_list
       from pg_policies
-     where schemaname = 'public'
-       and 'anon' = any(roles);
+     where schemaname = 'public' and 'anon' = any(roles);
 
-    if v_anon_policies > 0 then
-        raise exception
-            'Hardening incompleto: % policy(ies) ainda aceitam o papel anon.', v_anon_policies;
+    if v_count > 0 then
+        raise exception 'Hardening incompleto: % policy(ies) ainda aceitam anon: %', v_count, v_list;
     end if;
 
-    raise notice 'Hardening da RLS concluido: nenhuma policy aceita anon.';
+    -- (b) Nenhuma policy de tabela de negocio usa USING(true) -- o modo aberto.
+    select count(*), string_agg(format('%s.%s', tablename, policyname), ', ')
+      into v_count, v_list
+      from pg_policies
+     where schemaname = 'public'
+       and tablename = any(v_business)
+       and (qual = 'true' or with_check = 'true');
+
+    if v_count > 0 then
+        raise exception 'Ainda existe policy permissiva (USING/WITH CHECK true): %', v_list;
+    end if;
+
+    -- (c) anon nao tem privilegio de tabela nenhum sobre negocio nem integracao.
+    select count(*), string_agg(format('%s:%s', table_name, privilege_type), ', ')
+      into v_count, v_list
+      from information_schema.role_table_grants
+     where table_schema = 'public'
+       and grantee = 'anon';
+
+    if v_count > 0 then
+        raise exception 'anon ainda tem % grant(s) em public: %', v_count, v_list;
+    end if;
+
+    -- (d) organization_id NOT NULL nas 13 tabelas de negocio.
+    select count(*), string_agg(table_name, ', ')
+      into v_count, v_list
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = any(v_business)
+       and column_name = 'organization_id'
+       and is_nullable = 'YES';
+
+    if v_count > 0 then
+        raise exception 'organization_id ainda aceita NULL em: %', v_list;
+    end if;
+
+    -- Confere tambem que a coluna EXISTE nas 13 -- a ausencia seria pior que o NULL.
+    select count(*) into v_count
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = any(v_business)
+       and column_name = 'organization_id';
+
+    if v_count <> array_length(v_business, 1) then
+        raise exception 'organization_id presente em apenas % das % tabelas de negocio.',
+            v_count, array_length(v_business, 1);
+    end if;
+
+    -- (e) Nenhuma view SECURITY DEFINER. reloptions sem security_invoker=true
+    --     significa definer (o default do Postgres).
+    select count(*), string_agg(c.relname, ', ')
+      into v_count, v_list
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relkind = 'v'
+       and not coalesce(c.reloptions::text[] @> array['security_invoker=true'], false);
+
+    if v_count > 0 then
+        raise exception 'View(s) SECURITY DEFINER encontradas: %', v_list;
+    end if;
+
+    -- (f) Toda tabela de negocio com RLS habilitada.
+    select count(*), string_agg(c.relname, ', ')
+      into v_count, v_list
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = any(v_business)
+       and c.relrowsecurity = false;
+
+    if v_count > 0 then
+        raise exception 'RLS desabilitada em: %', v_list;
+    end if;
+
+    raise notice 'Hardening da RLS concluido: 6 invariantes verificadas.';
 end $verify$;
 
 -- ============================================================================

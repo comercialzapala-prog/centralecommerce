@@ -2,30 +2,44 @@
 /**
  * Inspecao READ-ONLY do banco linkado.
  *
- *   node scripts/db-inspect.mjs
+ *   npm run db:inspect
  *
  * Nao escreve nada. Serve para dois momentos:
  *   - ANTES de aplicar uma migration, para saber o estado de partida e o volume
  *     de cada tabela (o que define o custo de lock do backfill);
  *   - DEPOIS, para confirmar que o que era esperado apareceu.
  *
- * Usa a chave anon e o PostgREST. Consequencia disso: "ausente" pode significar
- * "nao existe" OU "existe e a RLS/grant nao deixa anon ver". O script distingue
- * os dois casos pelo codigo HTTP e pelo codigo de erro do PostgREST -- e essa
- * distincao e justamente o que interessa depois do hardening.
+ * DUAS COLUNAS DE IDENTIDADE, e a diferenca entre elas e o ponto:
+ *
+ *   anon    -> depois do hardening tem de ser `negado` em TUDO. Se aparecer `ok`
+ *              numa tabela de negocio, e vazamento.
+ *   service -> a verdade sobre o schema: o que existe e quantas linhas tem.
+ *              Ignora RLS de proposito, e por isso nunca sai do servidor.
+ *
+ * Sem a service role o script ainda roda, mas só consegue dizer o que anon
+ * alcanca -- o que, num banco endurecido, e nada.
  */
 
-import { loadEnv, restRaw, countRows, TABLES_V2, TABLES_INTEGRATION, VIEWS_ALL } from './_supabase.mjs'
+import {
+  TABLES_V2,
+  TABLES_INTEGRATION,
+  VIEWS_ALL,
+  countRows,
+  loadEnv,
+  restRaw,
+} from './_supabase.mjs'
 
 const env = loadEnv()
+const anon = { key: env.NEXT_PUBLIC_SUPABASE_ANON_KEY }
+const HAS_SERVICE = Boolean(env.SUPABASE_SERVICE_ROLE_KEY)
+const service = { key: env.SUPABASE_SERVICE_ROLE_KEY }
 
-const label = (value) => String(value).padEnd(28)
+const pad = (value, size) => String(value).padEnd(size)
 
-async function probe(name) {
-  // limit=0 devolve corpo vazio e ainda assim passa por RLS e grants.
-  const res = await restRaw(env, `${name}?select=*&limit=0`)
+async function probe(name, identity) {
+  const res = await restRaw(env, `${name}?select=*&limit=0`, identity)
 
-  if (res.status === 200) return { state: 'OK' }
+  if (res.status === 200 || res.status === 206) return 'ok'
 
   let code = null
   try {
@@ -34,55 +48,57 @@ async function probe(name) {
     /* corpo nao-JSON */
   }
 
-  // 42P01 = relacao inexistente. 42501 = permissao negada.
-  if (code === '42P01') return { state: 'NAO EXISTE' }
-  if (code === '42501' || res.status === 401 || res.status === 403) {
-    return { state: 'SEM PERMISSAO', detail: `HTTP ${res.status}` }
-  }
-  return { state: `ERRO ${res.status}`, detail: code ?? res.body.slice(0, 120) }
+  if (code === 'PGRST205' || code === '42P01') return 'ausente'
+  if (res.status === 401 || res.status === 403 || code === '42501') return 'negado'
+  return `erro${res.status}`
 }
 
 async function hasColumn(table, column) {
-  const res = await restRaw(env, `${table}?select=${column}&limit=0`)
-  if (res.status === 200) return true
-  return false
+  if (!HAS_SERVICE) return null
+  const res = await restRaw(env, `${table}?select=${column}&limit=0`, service)
+  return res.status === 200 || res.status === 206
+}
+
+async function report(title, names, { columns = false } = {}) {
+  console.log(`\n=== ${title} ===`)
+  console.log(`${pad('objeto', 28)}${pad('anon', 10)}${pad('service', 10)}${columns ? '   linhas  organization_id' : ''}`)
+
+  for (const name of names) {
+    const viaAnon = await probe(name, anon)
+    const viaService = HAS_SERVICE ? await probe(name, service) : '-'
+
+    let extra = ''
+    if (columns && viaService === 'ok') {
+      const rows = await countRows(env, name, service)
+      const org = await hasColumn(name, 'organization_id')
+      extra = `   ${String(rows ?? '-').padStart(6)}  ${org ? 'presente' : 'ausente'}`
+    }
+
+    // Marca o que seria vazamento: anon alcancando dado de negocio.
+    const flag = viaAnon === 'ok' ? '   <-- ANON ALCANCA' : ''
+
+    console.log(pad(name, 28) + pad(viaAnon, 10) + pad(viaService, 10) + extra + flag)
+  }
 }
 
 async function main() {
   console.log(`Projeto: ${env.NEXT_PUBLIC_SUPABASE_URL}`)
-  console.log(`Chave:   anon\n`)
+  console.log(`Service role: ${HAS_SERVICE ? 'disponivel' : 'AUSENTE (coluna service fica vazia)'}`)
 
-  console.log('=== TABELAS DA V2 (existentes) ===')
-  console.log(`${label('tabela')}${'estado'.padEnd(16)}${'linhas'.padStart(9)}  organization_id`)
-  for (const table of TABLES_V2) {
-    const result = await probe(table)
-    const rows = result.state === 'OK' ? await countRows(env, table) : null
-    const org = result.state === 'OK' ? await hasColumn(table, 'organization_id') : false
-    console.log(
-      label(table) +
-        result.state.padEnd(16) +
-        String(rows ?? '-').padStart(9) +
-        '  ' +
-        (result.state === 'OK' ? (org ? 'presente' : 'AUSENTE') : '-') +
-        (result.detail ? `  (${result.detail})` : ''),
-    )
+  await report('TABELAS DA V2 (existentes)', TABLES_V2, { columns: true })
+  await report('TABELAS DE INTEGRACAO', TABLES_INTEGRATION, { columns: true })
+  await report('VIEWS', VIEWS_ALL)
+
+  const leaks = []
+  for (const name of [...TABLES_V2, ...TABLES_INTEGRATION, ...VIEWS_ALL]) {
+    if ((await probe(name, anon)) === 'ok') leaks.push(name)
   }
 
-  console.log('\n=== TABELAS DE INTEGRACAO (novas) ===')
-  for (const table of TABLES_INTEGRATION) {
-    const result = await probe(table)
-    const rows = result.state === 'OK' ? await countRows(env, table) : null
-    console.log(
-      label(table) + result.state.padEnd(16) + String(rows ?? '-').padStart(9) +
-        (result.detail ? `  (${result.detail})` : ''),
-    )
-  }
-
-  console.log('\n=== VIEWS ===')
-  for (const view of VIEWS_ALL) {
-    const result = await probe(view)
-    console.log(label(view) + result.state.padEnd(16) + (result.detail ? `(${result.detail})` : ''))
-  }
+  console.log(
+    leaks.length === 0
+      ? '\nanon nao alcanca nenhum objeto de public. Endurecido.'
+      : `\nATENCAO: anon alcanca ${leaks.length} objeto(s): ${leaks.join(', ')}`,
+  )
 }
 
 main().catch((error) => {
