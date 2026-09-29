@@ -3,7 +3,7 @@
 import { useActionState } from 'react'
 import * as React from 'react'
 import { useFormStatus } from 'react-dom'
-import { Check, EyeOff, Loader2, RotateCcw, Undo2 } from 'lucide-react'
+import { BellOff, Check, EyeOff, Loader2, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { IDLE_STATE, type ActionState } from '@/lib/actions'
@@ -47,10 +47,16 @@ export function AlertStatusActions({
           {status === 'OPEN' ? (
             <StatusButton
               value="ACKNOWLEDGED"
-              label="Marcar como visto"
-              icon={<Undo2 className="size-3.5" />}
+              label="Já vi — tirar da lista"
+              icon={<EyeOff className="size-3.5" />}
             />
-          ) : null}
+          ) : (
+            <StatusButton
+              value="OPEN"
+              label="Trazer de volta para a lista"
+              icon={<RotateCcw className="size-3.5" />}
+            />
+          )}
           <StatusButton
             value="RESOLVED"
             label="Marcar como resolvido"
@@ -59,8 +65,8 @@ export function AlertStatusActions({
           />
           <StatusButton
             value="DISMISSED"
-            label="Ignorar"
-            icon={<EyeOff className="size-3.5" />}
+            label="Ignorar — não quero mais este alerta"
+            icon={<BellOff className="size-3.5" />}
           />
         </>
       )}

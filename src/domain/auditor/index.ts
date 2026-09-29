@@ -168,6 +168,17 @@ const SEVERITY_RANK: Record<AuditSeverity, number> = {
 }
 
 /**
+ * `a` e mais grave que `b`?
+ *
+ * A ordem das severidades pertence ao dominio, nao a quem desenha a tela nem a
+ * quem grava no banco -- por isso a comparacao mora aqui, ao lado de
+ * SEVERITY_RANK, em vez de cada chamador reinventar o ranking.
+ */
+export function isMoreSevere(a: AuditSeverity, b: AuditSeverity): boolean {
+  return SEVERITY_RANK[a] < SEVERITY_RANK[b]
+}
+
+/**
  * Ordena os achados por prioridade.
  *
  * NAO existe score. Nenhum numero e somado, ponderado ou normalizado -- um score

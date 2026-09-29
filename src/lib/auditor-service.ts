@@ -9,10 +9,12 @@ import {
   type VariableCosts,
 } from '@/domain/intelligence'
 import {
+  isMoreSevere,
   runAuditor,
   toIntelligenceParams,
   type AuditFinding,
   type AuditorReport,
+  type AuditSeverity,
   type IntegrationHealthInput,
 } from '@/domain/auditor'
 import { loadIntegrationSettings } from '@/integrations/erp/settings'
@@ -317,6 +319,39 @@ type ExistingAlert = {
   id: string
   fingerprint: string
   status: string
+  severity: string
+  financial_impact: number | string | null
+}
+
+/**
+ * O achado piorou desde a ultima execucao?
+ *
+ * Existe por causa do "visto": marcar como visto TIRA o alerta da lista. Se o
+ * mesmo problema piorar depois disso, continuar escondido seria esconder
+ * justamente o que mais importa -- entao piorar reabre.
+ *
+ * Piorar e uma de duas coisas, e nenhuma delas e opiniao:
+ *   - a severidade subiu (atencao virou critico);
+ *   - o impacto financeiro cresceu mais de 20%.
+ *
+ * A margem de 20% existe para o alerta nao voltar a cada centavo de variacao:
+ * um numero que oscila 2% entre execucoes nao e noticia, e reabrir por isso
+ * treinaria voce a ignorar a lista.
+ */
+const WORSENED_IMPACT_RATIO = 1.2
+
+function worsened(previous: ExistingAlert, item: AuditFinding): boolean {
+  if (isMoreSevere(item.severity as AuditSeverity, previous.severity as AuditSeverity)) return true
+
+  const before = previous.financial_impact === null ? null : Number(previous.financial_impact)
+  const after = item.financialImpact === null ? null : Number(item.financialImpact)
+
+  // Sem numero antes e com numero agora: o alerta passou a saber quanto custa.
+  // Isso e informacao nova, nao ruido.
+  if (before === null) return after !== null && after > 0
+  if (after === null) return false
+
+  return after > before * WORSENED_IMPACT_RATIO
 }
 
 /**
@@ -327,7 +362,9 @@ type ExistingAlert = {
  *   - achado novo            -> INSERT com status OPEN;
  *   - achado que persiste    -> UPDATE do conteudo e de last_seen_at. O status e
  *                               PRESERVADO: quem marcou "visto" ou "ignorado" nao
- *                               ve o alerta voltar a gritar a cada execucao;
+ *                               ve o alerta voltar a gritar a cada execucao --
+ *                               com UMA excecao: alerta "visto" que PIOROU volta
+ *                               para OPEN (ver worsened());
  *   - achado que voltou      -> alerta antes RESOLVED volta para OPEN, porque o
  *                               problema reapareceu de fato;
  *   - achado que desapareceu -> RESOLVED automaticamente. E isto que alimenta
@@ -376,7 +413,7 @@ export async function runAuditorForOrganization(options: {
 
     const existingResult = await db
       .from('alerts')
-      .select('id,fingerprint,status')
+      .select('id,fingerprint,status,severity,financial_impact')
       .eq('organization_id', organizationId)
 
     if (existingResult.error) {
@@ -414,6 +451,10 @@ export async function runAuditorForOrganization(options: {
       if (previous.status === 'RESOLVED') {
         patch.status = 'OPEN'
         patch.resolved_at = null
+      } else if (previous.status === 'ACKNOWLEDGED' && worsened(previous, item)) {
+        // Visto esconde da lista; piorar traz de volta. Ver worsened().
+        patch.status = 'OPEN'
+        patch.acknowledged_at = null
       }
 
       const { error } = await db.from('alerts').update(patch).eq('id', previous.id)

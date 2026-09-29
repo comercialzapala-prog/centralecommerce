@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import {
   CircleAlert,
   Clock,
+  EyeOff,
   Lightbulb,
   PackageSearch,
   PlugZap,
@@ -36,7 +37,9 @@ import { summarizeByStatus, summarizeOrders } from '@/lib/finance'
 import { formatCurrency, formatDateTime, formatNumber, formatPercent, num } from '@/lib/format'
 import {
   ACTIVE_STATUSES,
+  SEEN_STATUSES,
   buildHojeBlocks,
+  discountSeen,
   parseHojeFilters,
   periodCutoff,
   prioritizeAlerts,
@@ -44,7 +47,7 @@ import {
   sumFinancialImpact,
 } from '@/lib/hoje'
 
-import { markReviewed, runAnalysis, setAlertStatus } from './actions'
+import { markReviewed, openAlert, runAnalysis, setAlertStatus } from './actions'
 
 /**
  * /hoje -- A CENTRAL OPERACIONAL DIARIA (secao 30)
@@ -100,6 +103,7 @@ export default async function HojePage({
   const [
     summary,
     rawAlerts,
+    seenAlerts,
     resolvedAlerts,
     recommendations,
     outcomes,
@@ -117,6 +121,9 @@ export default async function HojePage({
       channel: filters.channel,
       since,
     }),
+    // Sem os filtros da tela de propósito: os vistos servem para descontar os
+    // KPIs, e um desconto parcial faria o KPI mentir na direção contrária.
+    getAlerts(organizationId, { statuses: SEEN_STATUSES }),
     getResolvedAlerts(organizationId, 8),
     getOpenRecommendations(organizationId, 12),
     getRecommendationOutcomes(organizationId, 5),
@@ -137,9 +144,21 @@ export default async function HojePage({
 
   const review = splitSinceLastReview(alerts, resolvedAlerts, lastReviewedAt)
 
-  const criticalCount = num(summary?.critical_open)
-  const importantCount = num(summary?.important_open)
-  const opportunityCount = num(summary?.opportunity_open)
+  // A view conta OPEN + ACKNOWLEDGED; a lista mostra so OPEN. Sem este desconto
+  // o KPI "3 criticos" levaria a uma tela vazia. Ver discountSeen().
+  const kpis = discountSeen(
+    {
+      critical: num(summary?.critical_open),
+      important: num(summary?.important_open),
+      opportunity: num(summary?.opportunity_open),
+      impactAtRisk: num(summary?.impact_at_risk),
+    },
+    seenAlerts,
+  )
+
+  const criticalCount = kpis.critical
+  const importantCount = kpis.important
+  const opportunityCount = kpis.opportunity
   const neverRan = !lastRun
 
   return (
@@ -204,10 +223,8 @@ export default async function HojePage({
         />
         <MetricCard
           title="Dinheiro em risco"
-          value={
-            num(summary?.impact_at_risk) > 0 ? formatCurrency(num(summary?.impact_at_risk)) : '—'
-          }
-          tone={num(summary?.impact_at_risk) > 0 ? 'negative' : 'neutral'}
+          value={kpis.impactAtRisk > 0 ? formatCurrency(kpis.impactAtRisk) : '—'}
+          tone={kpis.impactAtRisk > 0 ? 'negative' : 'neutral'}
           icon={Receipt}
           hint="Soma dos alertas com impacto calculável"
         />
@@ -271,7 +288,12 @@ export default async function HojePage({
                   {index + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <AlertCard alert={alert} setStatus={setAlertStatus} showEvidence={false} />
+                  <AlertCard
+                    alert={alert}
+                    setStatus={setAlertStatus}
+                    openTarget={openAlert}
+                    showEvidence={false}
+                  />
                 </div>
               </div>
             ))}
@@ -284,9 +306,11 @@ export default async function HojePage({
         <EmptyState
           title="Nada exige atenção agora"
           description={
-            lastRun?.findings_total === 0
-              ? 'A última análise não encontrou problema nas regras configuradas. Quando algo mudar, aparece aqui.'
-              : 'Nenhum alerta corresponde aos filtros aplicados. Limpe os filtros para ver tudo.'
+            kpis.hidden > 0
+              ? `${formatNumber(kpis.hidden)} alerta(s) que você já viu estão fora da lista. Eles continuam em “Já vistos”, no fim da página.`
+              : lastRun?.findings_total === 0
+                ? 'A última análise não encontrou problema nas regras configuradas. Quando algo mudar, aparece aqui.'
+                : 'Nenhum alerta corresponde aos filtros aplicados. Limpe os filtros para ver tudo.'
           }
         />
       ) : null}
@@ -307,7 +331,12 @@ export default async function HojePage({
             </div>
             <div className="space-y-2">
               {block.alerts.map((alert) => (
-                <AlertCard key={alert.id} alert={alert} setStatus={setAlertStatus} />
+                <AlertCard
+                  key={alert.id}
+                  alert={alert}
+                  setStatus={setAlertStatus}
+                  openTarget={openAlert}
+                />
               ))}
             </div>
           </section>
@@ -415,6 +444,38 @@ export default async function HojePage({
         </section>
       ) : null}
 
+      {/* ----------------- Ja vistos -----------------
+          Recolhida: o que voce ja leu nao pode ocupar o mesmo espaco do que e
+          novo, mas tambem nao pode sumir sem deixar rastro. Fechada por padrao,
+          com a contagem a vista. */}
+      {!filters.status && seenAlerts.length > 0 ? (
+        <details className="rounded-xl border bg-card p-4">
+          <summary className="cursor-pointer text-sm font-semibold">
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <EyeOff size={14} className="text-muted-foreground" />
+              Já vistos
+              <Badge variant="outline">{formatNumber(seenAlerts.length)}</Badge>
+            </span>
+          </summary>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Saíram da lista porque você já leu — não porque deixaram de existir. Se um deles
+            piorar, severidade ou impacto maior, a próxima análise devolve ele para a lista
+            sozinho. Para nunca mais ver um alerta, use “Ignorar”.
+          </p>
+          <div className="mt-3 space-y-2">
+            {prioritizeAlerts(seenAlerts).map((alert) => (
+              <AlertCard
+                key={alert.id}
+                alert={alert}
+                setStatus={setAlertStatus}
+                openTarget={openAlert}
+                showEvidence={false}
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
+
       {/* ----------------- Resolvidos recentemente ----------------- */}
       {resolvedAlerts.length > 0 ? (
         <section className="space-y-2.5">
@@ -433,6 +494,7 @@ export default async function HojePage({
                 key={alert.id}
                 alert={alert}
                 setStatus={setAlertStatus}
+                openTarget={openAlert}
                 showEvidence={false}
               />
             ))}

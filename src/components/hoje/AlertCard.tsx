@@ -1,6 +1,6 @@
-import Link from 'next/link'
-import { ArrowRight, CircleAlert, Info, TriangleAlert } from 'lucide-react'
+import { CircleAlert, Info, TriangleAlert } from 'lucide-react'
 
+import { AlertResolveButton } from '@/components/hoje/AlertResolveButton'
 import { AlertStatusActions } from '@/components/hoje/AlertStatusActions'
 import { Badge } from '@/components/ui/badge'
 import type { ActionState } from '@/lib/actions'
@@ -52,10 +52,12 @@ const SEVERITY_STYLE = {
 export function AlertCard({
   alert,
   setStatus,
+  openTarget,
   showEvidence = true,
 }: {
   alert: AlertRow
   setStatus: (prev: ActionState, formData: FormData) => Promise<ActionState>
+  openTarget: (prev: ActionState, formData: FormData) => Promise<ActionState>
   showEvidence?: boolean
 }) {
   const style = SEVERITY_STYLE[alert.severity]
@@ -140,15 +142,9 @@ export function AlertCard({
             </details>
           ) : null}
 
-          {/* PARA ONDE IR */}
+          {/* PARA ONDE IR -- e, no mesmo clique, "ja vi este" (ver openAlert) */}
           {alert.action_href ? (
-            <Link
-              href={alert.action_href}
-              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-            >
-              Resolver
-              <ArrowRight className="size-3" />
-            </Link>
+            <AlertResolveButton alertId={alert.id} action={openTarget} />
           ) : null}
         </div>
 

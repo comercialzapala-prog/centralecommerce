@@ -36,8 +36,24 @@ export const ALERT_STATUS_ORDER: AlertRow['status'][] = [
   'DISMISSED',
 ]
 
-/** Status que representam "ainda exige atencao". */
-export const ACTIVE_STATUSES: AlertRow['status'][] = ['OPEN', 'ACKNOWLEDGED']
+/**
+ * Status que a LISTA PRINCIPAL mostra.
+ *
+ * Só OPEN. "Visto" sai da lista de propósito: uma página que existe para
+ * responder "o que exige atenção agora" perde a função quando repete o que você
+ * já leu -- o alerta visto vira ruído e empurra para baixo o que ainda é novo.
+ *
+ * Esconder aqui não é apagar. O que sai continua em três lugares: na seção
+ * "Já vistos" (recolhida, no fim da página), no filtro de status, e na
+ * reconciliação -- que REABRE sozinho o alerta visto que piorou, severidade
+ * maior ou impacto maior (ver `worsened()` em auditor-service.ts). Marcar como
+ * visto diz "já sei disso", não "nunca mais me avise"; para isso existe
+ * "Ignorar".
+ */
+export const ACTIVE_STATUSES: AlertRow['status'][] = ['OPEN']
+
+/** O que saiu da lista por já ter sido visto. */
+export const SEEN_STATUSES: AlertRow['status'][] = ['ACKNOWLEDGED']
 
 export const SEVERITY_LABEL: Record<AuditSeverity, string> = {
   CRITICO: 'Crítico',
@@ -269,6 +285,45 @@ export function splitSinceLastReview(
 /** Soma do impacto financeiro dos alertas que sabem calcular. */
 export function sumFinancialImpact(alerts: AlertRow[]): number {
   return alerts.reduce((total, alert) => total + Number(alert.financial_impact ?? 0), 0)
+}
+
+/**
+ * Desconta dos KPIs o que já foi visto.
+ *
+ * `v_hoje_summary` conta OPEN + ACKNOWLEDGED, e está certa: o problema continua
+ * existindo depois de visto. Mas a lista mostra só OPEN, e KPI que não bate com
+ * a lista embaixo dele é pior do que KPI nenhum -- você clicaria em "3 críticos"
+ * e cairia numa tela vazia.
+ *
+ * O desconto acontece aqui, e não numa segunda consulta, porque a página já
+ * carrega os vistos para desenhar a seção "Já vistos": subtrair o que já está na
+ * memória é mais barato do que manter duas definições do mesmo KPI, uma na view
+ * e outra numa query paralela que divergiria no primeiro dia em que alguém
+ * mudasse uma das duas.
+ *
+ * `hidden` é devolvido junto porque a tela precisa DIZER que escondeu algo.
+ * Esconder em silêncio seria a versão ruim desta funcionalidade.
+ */
+export function discountSeen(
+  counts: { critical: number; important: number; opportunity: number; impactAtRisk: number },
+  seen: AlertRow[],
+): {
+  critical: number
+  important: number
+  opportunity: number
+  impactAtRisk: number
+  hidden: number
+} {
+  const count = (severity: AuditSeverity) =>
+    seen.filter((alert) => alert.severity === severity).length
+
+  return {
+    critical: Math.max(0, counts.critical - count('CRITICO')),
+    important: Math.max(0, counts.important - count('IMPORTANTE')),
+    opportunity: Math.max(0, counts.opportunity - count('OPORTUNIDADE')),
+    impactAtRisk: Math.max(0, counts.impactAtRisk - sumFinancialImpact(seen)),
+    hidden: seen.length,
+  }
 }
 
 /* -------------------------------------------------------------------------- */

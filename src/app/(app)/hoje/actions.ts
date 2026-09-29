@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 
 import {
   actionError,
@@ -123,6 +124,63 @@ export async function setAlertStatus(
             : 'Alerta reaberto.'
 
     return actionOk(label)
+  })
+}
+
+/**
+ * Abre o alvo do alerta e marca como visto no MESMO gesto.
+ *
+ * Clicar em "Resolver" e a prova mais forte de que a pessoa leu o alerta -- mais
+ * forte do que apertar um botao de "visto", que quase ninguem aperta. Entao o
+ * clique carimba ACKNOWLEDGED e o alerta sai da lista, em vez de continuar ali
+ * na proxima visita competindo com o que ainda nao foi lido.
+ *
+ * So carimba quem estava OPEN. Clicar em "Resolver" a partir da secao dos
+ * resolvidos nao deve ressuscitar o alerta como visto.
+ *
+ * O DESTINO NAO VEM DO FORMULARIO. Ele e lido de `action_href` no banco, ja
+ * gravado pela regra que criou o alerta. Aceitar o destino do cliente seria um
+ * redirecionamento aberto: qualquer pessoa montaria um POST que leva a outro
+ * lugar. A checagem de barra inicial e a segunda trava, para o caso de uma regra
+ * futura gravar um endereco externo por engano.
+ */
+export async function openAlert(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  return runAction(async () => {
+    const { membership } = await requireMembership()
+
+    const alertId = readUuid(formData, 'alert_id')
+    if (!alertId) return actionError('Alerta não identificado.')
+
+    const db = createAdminClient()
+    const { data: alert, error: readError } = await db
+      .from('alerts')
+      .select('id,status,action_href')
+      .eq('id', alertId)
+      // O mesmo filtro do setAlertStatus, pela mesma razao: service role ignora RLS.
+      .eq('organization_id', membership.organizationId)
+      .maybeSingle()
+
+    if (readError) return actionError(`Não foi possível abrir: ${readError.message}`)
+    if (!alert) return actionError('Alerta não encontrado nesta organização.')
+
+    if (alert.status === 'OPEN') {
+      const { error } = await db
+        .from('alerts')
+        .update({ status: 'ACKNOWLEDGED', acknowledged_at: new Date().toISOString() })
+        .eq('id', alert.id)
+        .eq('organization_id', membership.organizationId)
+
+      if (error) return actionError(`Não foi possível marcar como visto: ${error.message}`)
+      revalidateHoje()
+    }
+
+    const href = typeof alert.action_href === 'string' ? alert.action_href : ''
+    const target = href.startsWith('/') && !href.startsWith('//') ? href : '/hoje'
+
+    redirect(target)
   })
 }
 

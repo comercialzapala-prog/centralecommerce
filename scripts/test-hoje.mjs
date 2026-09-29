@@ -13,7 +13,9 @@
  *   5. recomendacao associada aparece na secao propria;
  *   6. isolamento entre duas organizacoes;
  *   7. integracao desligada nao gera ruido;
- *   8. a ordem de prioridade documentada e a ordem renderizada.
+ *   8. a ordem de prioridade documentada e a ordem renderizada;
+ *   9. "visto" some da lista e reaparece em "Ja vistos";
+ *  10. alerta visto que PIOROU volta sozinho para a lista.
  *
  * COMO ELE VERIFICA: procura no HTML servido. Nao e teste de unidade do
  * componente -- e prova de que o dado chegou na tela depois de passar por RLS,
@@ -659,6 +661,166 @@ async function main() {
       isolated.html.includes('999.999') ? 'VAZOU' : 'fora',
       'fora',
     )
+  }
+
+  /* ---------------- 11) visto sai da lista ---------------- */
+  console.log('\n11) visto sai da lista')
+
+  const seenTitle = `${TAG} ja fui lido`
+  const [seenAlert] = await seedAlerts([
+    alertSeed({
+      severity: 'CRITICO',
+      domain: 'PRECO',
+      title: seenTitle,
+      financial_impact: 7777.77,
+      impact_kind: 'PERDA_MARGEM',
+    }),
+  ])
+  cleanup.push(async () => {
+    await restRaw(env, `alerts?id=eq.${seenAlert.id}`, { ...service, method: 'DELETE' })
+  })
+
+  const beforeSeen = await fetchHoje()
+  check(
+    'alerta novo aparece na lista',
+    beforeSeen.html.includes(seenTitle) ? 'aparece' : 'ausente',
+    'aparece',
+  )
+
+  await restRaw(env, `alerts?id=eq.${seenAlert.id}`, {
+    ...service,
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'ACKNOWLEDGED',
+      acknowledged_at: new Date().toISOString(),
+    }),
+  })
+
+  const afterSeen = await fetchHoje()
+
+  // A secao "Ja vistos" vem DEPOIS dos blocos, entao o que esta antes dela no
+  // HTML e a lista propriamente dita. Cortar ali e o jeito de perguntar "saiu da
+  // lista?" sem depender de classe de CSS nem de ordem de atributo.
+  const listRegion = afterSeen.html.split('Já vistos')[0]
+  check(
+    'alerta visto sai da lista principal',
+    listRegion.includes(seenTitle) ? 'CONTINUA' : 'saiu',
+    'saiu',
+  )
+  check(
+    'secao "Ja vistos" aparece',
+    afterSeen.html.includes('Já vistos') ? 'aparece' : 'ausente',
+    'aparece',
+  )
+  check(
+    'alerta visto continua acessivel na secao',
+    afterSeen.html.includes(seenTitle) ? 'acessivel' : 'sumiu',
+    'acessivel',
+  )
+  check(
+    'filtro de status alcanca o visto',
+    (await fetchHoje('?status=ACKNOWLEDGED')).html.includes(seenTitle) ? 'alcanca' : 'ausente',
+    'alcanca',
+  )
+
+  // O KPI tem de descontar o visto: a view conta OPEN + ACKNOWLEDGED, a tela nao.
+  // 7.777,77 so aparece no HTML se o desconto NAO tiver acontecido no card
+  // "Dinheiro em risco" -- e ele ainda aparece dentro do cartao do alerta, entao
+  // a pergunta e feita na regiao dos KPIs, antes da barra de filtros.
+  const kpiRegion = afterSeen.html.split('Dinheiro em risco')[1]?.split('Integrações')[0] ?? ''
+  check(
+    'KPI "Dinheiro em risco" desconta o visto',
+    kpiRegion.includes('7.777,77') ? 'NAO DESCONTOU' : 'descontou',
+    'descontou',
+  )
+
+  /* ---------------- 12) visto que piorou volta para a lista ---------------- */
+  console.log('\n12) visto que piorou volta para a lista')
+
+  if (productId) {
+    const stockoutRow = JSON.parse(
+      (
+        await restRaw(
+          env,
+          `alerts?select=id,status,severity,financial_impact&product_id=eq.${productId}&rule_code=eq.STOCK_STOCKOUT_RISK`,
+          service,
+        )
+      ).body,
+    )[0]
+
+    if (!stockoutRow) {
+      check('alerta de ruptura disponivel para o teste', 'ausente', 'presente')
+    } else {
+      // Marca como visto e REBAIXA o alerta no banco. A proxima execucao vai
+      // encontrar o mesmo problema com severidade e impacto maiores do que o
+      // gravado -- que e exatamente a definicao de "piorou".
+      await restRaw(env, `alerts?id=eq.${stockoutRow.id}`, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'ACKNOWLEDGED',
+          acknowledged_at: new Date().toISOString(),
+          severity: 'OPORTUNIDADE',
+          financial_impact: 1,
+        }),
+      })
+
+      // O endpoint tem cooldown de 30s. Envelhecer a ultima execucao e mais
+      // honesto do que esperar meio minuto em cada rodada da suite.
+      await restRaw(env, `auditor_runs?organization_id=eq.${orgId}`, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({
+          started_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+        }),
+      })
+
+      const rerun = await fetch(`${BASE}/api/auditor/run`, {
+        method: 'POST',
+        headers: { Cookie: session.cookie },
+      })
+      check('reexecucao do auditor aceita', String(rerun.status), '200')
+
+      const reopened = JSON.parse(
+        (await restRaw(env, `alerts?select=status,severity&id=eq.${stockoutRow.id}`, service)).body,
+      )[0]
+      check('alerta visto que piorou volta para OPEN', String(reopened?.status), 'OPEN')
+      check(
+        'severidade volta a ser a que a regra calcula',
+        String(reopened?.severity),
+        String(stockoutRow.severity),
+      )
+
+      // O contrario tem de continuar valendo: visto que NAO piorou fica escondido.
+      await restRaw(env, `auditor_runs?organization_id=eq.${orgId}`, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({
+          started_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+        }),
+      })
+      await restRaw(env, `alerts?id=eq.${stockoutRow.id}`, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'ACKNOWLEDGED',
+          acknowledged_at: new Date().toISOString(),
+        }),
+      })
+      const quiet = await fetch(`${BASE}/api/auditor/run`, {
+        method: 'POST',
+        headers: { Cookie: session.cookie },
+      })
+      check('reexecucao sem piora aceita', String(quiet.status), '200')
+      const stillSeen = JSON.parse(
+        (await restRaw(env, `alerts?select=status&id=eq.${stockoutRow.id}`, service)).body,
+      )[0]
+      check(
+        'visto que nao piorou continua fora da lista',
+        String(stillSeen?.status),
+        'ACKNOWLEDGED',
+      )
+    }
   }
 }
 
