@@ -12,7 +12,8 @@
     "test:rls": "node scripts/test-rls.mjs",
     "smoke": "node scripts/smoke-pages.mjs",
     "test:auth": "node scripts/test-auth.mjs",
-    "test:hoje": "node scripts/test-hoje.mjs"
+    "test:hoje": "node scripts/test-hoje.mjs",
+    "test:boundaries": "node scripts/test-client-boundaries.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

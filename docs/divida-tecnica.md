@@ -64,6 +64,32 @@ linha de `org_delete` é a alteração inteira. Candidatas a exigir admin:
 hierarquia). Candidatas a seguir em membro: `channels`, `payment_methods`,
 `categories` (cadastros de apoio).
 
+## Identidade dos clients Supabase
+
+A regra, verificada por `npm run test:boundaries`:
+
+| uso | client | identidade |
+|---|---|---|
+| dado de negócio | `createAuthedClient()` | cookie do usuário, passa pela RLS |
+| infraestrutura sem usuário | `createInfraClient()` | service role |
+| navegador | `@/lib/supabase/client` | anon, só o que a RLS permitir |
+
+Em 2026-09-29, ao investigar o `permission denied for table products` da produção,
+apareceram duas armadilhas latentes — nenhuma era a causa do incidente (aquele foi
+deploy antigo contra banco novo), mas as duas o teriam disfarçado:
+
+- **`src/lib/supabase.ts`** — client anon em escopo de módulo, com
+  `|| 'placeholder'` nas credenciais. Não era importado por ninguém. **Removido.**
+- **`createInfraClient()` caía para o client de cookie** quando a service role não
+  estava configurada. A justificativa escrita na própria função era "é aceitável
+  porque hoje `anon` ainda lê essas tabelas" — premissa que o hardening apagou.
+  Num contexto sem sessão (webhook, cron) essa queda resolvia para **anon**.
+  **Removida:** agora a falta da chave é `ServiceRoleNotConfiguredError`.
+
+Teste de permissão no banco não pegaria nenhuma das duas: o banco estava correto
+nos dois casos. O que estava errado era **quem a aplicação mandava perguntar** —
+por isso metade de `test-client-boundaries.mjs` lê o código-fonte, não o banco.
+
 ## Deploy
 
 ### 5. `SUPABASE_SERVICE_ROLE_KEY` na Vercel

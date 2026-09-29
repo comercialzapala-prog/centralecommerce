@@ -58,21 +58,27 @@ export function createAdminClient(): SupabaseClient {
  *
  * Webhook, fila de jobs e reconciliacao rodam sem ninguem logado -- nao ha cookie
  * e nao ha `auth.uid()`. Eles precisam ler configuracao (`organizations`,
- * `integration_settings`) para funcionar, e depois do hardening da RLS essas
- * leituras exigem `authenticated`.
+ * `integration_settings`) para funcionar, e depois do hardening essas leituras
+ * exigem pelo menos `authenticated`.
  *
- * Preferencia pela service role, com queda para o client de cookie quando a chave
- * nao esta configurada. A queda existe para o ambiente de desenvolvimento
- * continuar funcionando antes de alguem configurar a chave -- e o motivo de ela
- * ser aceitavel e que hoje `anon` ainda le essas tabelas. Depois do hardening,
- * sem a service role, esses fluxos passam a falhar de forma explicita, que e
- * melhor do que ler dado errado.
+ * ESTA FUNCAO JA TEVE UMA QUEDA para o client de cookie quando a service role nao
+ * estava configurada, e ela foi REMOVIDA em 2026-09-29. A justificativa escrita
+ * aqui era "e aceitavel porque hoje `anon` ainda le essas tabelas" -- e o
+ * hardening de 2026-09-28 acabou com essa premissa. O que sobrava era o pior tipo
+ * de fallback: um caminho de negocio que troca de identidade em silencio,
+ * conforme uma variavel de ambiente, e que num contexto sem sessao (webhook,
+ * cron) resolveria para `anon`.
+ *
+ * Agora a falta da chave e um erro explicito (`ServiceRoleNotConfiguredError`).
+ * Falhar dizendo o que falta e melhor do que rodar com a identidade errada.
+ *
+ * O nome continua existindo, em vez de todos chamarem `createAdminClient()`
+ * direto, porque a distincao de INTENCAO importa: "sou infra, nao tenho usuario"
+ * e diferente de "preciso ignorar a RLS". Se um dia essas tabelas passarem a
+ * aceitar leitura por outro papel, a mudanca acontece aqui.
  *
  * NAO use isto para servir dado ao navegador: service role ignora RLS.
  */
 export async function createInfraClient(): Promise<SupabaseClient> {
-  if (isServiceRoleConfigured()) return createAdminClient()
-
-  const { createClient } = await import('@/lib/supabase/server')
-  return createClient()
+  return createAdminClient()
 }
