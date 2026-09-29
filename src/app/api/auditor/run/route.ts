@@ -69,7 +69,12 @@ export async function POST(): Promise<Response> {
       auto_resolved: result.autoResolved,
       recommendations: result.recommendations,
       counts: result.counts,
-      supplier_source_missing: result.supplierSourceMissing,
+      supplier_source: {
+        state: result.supplierSource.state,
+        reason: result.supplierSource.reason,
+        links_found: result.supplierSource.linksFound,
+        last_sync_at: result.supplierSource.lastSyncAt,
+      },
     })
   } catch (error) {
     // A mensagem ja e sanitizada pelo servico; o stack nunca sai daqui.

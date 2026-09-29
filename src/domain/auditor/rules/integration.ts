@@ -1,6 +1,7 @@
 import { formatNumber } from '@/lib/format'
 import { RESOLVE_PATHS } from '@/domain/auditor/impact'
 import { finding, type AuditFinding, type IntegrationHealthInput } from '@/domain/auditor/types'
+import type { SupplierSource } from '@/domain/auditor/supplier-source'
 
 /**
  * REGRAS DE INTEGRACAO (secoes 27 e 33)
@@ -12,6 +13,58 @@ import { finding, type AuditFinding, type IntegrationHealthInput } from '@/domai
  * Por isso "Bling fora de sincronia" e CRITICO mesmo quando nada mais parece
  * errado -- o silencio e o sintoma.
  */
+
+/**
+ * FONTE DE FORNECEDOR INDISPONÍVEL
+ *
+ * O contrapeso da supressão: se o auditor deixa de acusar "fornecedor ausente"
+ * quando não sabe, ele PRECISA dizer que não sabe. Calar as duas coisas seria
+ * trocar um alerta falso por um silêncio -- e silêncio é pior, porque parece
+ * saúde.
+ *
+ * UM alerta para a organização, não um por produto: o problema é da fonte.
+ *
+ * E APENAS UM MOTIVO, porque os outros já têm quem fale por eles. Repetir a
+ * mesma notícia com outro título é exatamente o ruído que o /hoje existe para
+ * evitar. O mapa completo, para ninguém ficar mudo:
+ *
+ *   DISCONNECTED  -> INTEGRATION_DISCONNECTED
+ *   TOKEN_EXPIRED -> INTEGRATION_TOKEN_EXPIRED
+ *   SYNC_ERROR    -> INTEGRATION_DEGRADED
+ *   NEVER_SYNCED  -> INTEGRATION_OUT_OF_SYNC (dispara com sync nulo também)
+ *   NO_DATA       -> esta regra. Ninguém mais percebe este caso: a conexão está
+ *                    saudável, sincronizou agora, e mesmo assim não veio um
+ *                    vínculo sequer. Para todo o resto do sistema parece
+ *                    normalidade -- e é justamente quando o silêncio engana.
+ */
+export function supplierSourceRules(source: SupplierSource): AuditFinding[] {
+  if (source.state !== 'UNAVAILABLE' || source.reason !== 'NO_DATA') return []
+
+  return [
+    finding({
+      ruleCode: 'INTEGRATION_SUPPLIER_SOURCE_UNAVAILABLE',
+      domain: 'INTEGRACAO',
+      severity: 'IMPORTANTE',
+      productId: null,
+      resourceType: 'erp_connection',
+      resourceId: 'BLING',
+      actionHref: RESOLVE_PATHS.integracao(),
+      sku: null,
+      title: 'Fornecedores não chegaram do ERP',
+      whatHappened:
+        'A última sincronização foi concluída, mas não trouxe nenhum vínculo entre produto e fornecedor.',
+      whyItMatters:
+        'Sem essa lista, a Central não tem como saber quais produtos estão sem fornecedor — e prefere não afirmar nada a acusar todos de uma vez. Enquanto isso, o prazo de reposição de cada produto cai no padrão configurado, e o ponto de recompra vira estimativa.',
+      dataPoints: {
+        motivo: source.reason,
+        ultima_sincronizacao: source.lastSyncAt,
+        vinculos_recebidos: source.linksFound,
+      },
+      suggestedAction:
+        'Conferir no Bling se os produtos têm fornecedor cadastrado e se o recurso está incluído na sincronização.',
+    }),
+  ]
+}
 
 export type IntegrationRuleParams = {
   /** Horas sem sincronizar que caracterizam "fora de sincronia". */

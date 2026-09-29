@@ -4,8 +4,10 @@ import { fullRules } from '@/domain/auditor/rules/full'
 import {
   DEFAULT_INTEGRATION_RULE_PARAMS,
   integrationRules,
+  supplierSourceRules,
   type IntegrationRuleParams,
 } from '@/domain/auditor/rules/integration'
+import type { SupplierSource } from '@/domain/auditor/supplier-source'
 import { pricingRules } from '@/domain/auditor/rules/pricing'
 import { duplicateSkuRule, registryRules } from '@/domain/auditor/rules/registry'
 import { stockRules } from '@/domain/auditor/rules/stock'
@@ -42,6 +44,12 @@ export type AuditorInput = {
   referenceDate: string
   /** Null quando nao ha integracao a auditar (Fase A sem conexao). */
   integration?: IntegrationHealthInput | null
+  /**
+   * Disponibilidade da fonte de fornecedor. Quando omitida, o auditor assume
+   * ABSENT -- o estado que NAO gera alerta de fornecedor ausente. O default
+   * conservador e proposital: quem nao informou a fonte nao tem evidencia.
+   */
+  supplierSource?: SupplierSource
   integrationRuleParams?: IntegrationRuleParams
   /** Instante para as regras de integracao. Default: meia-noite UTC da referencia. */
   referenceTime?: Date
@@ -57,6 +65,15 @@ export type AuditorReport = {
   /** Quantos produtos entraram na analise. */
   productsAnalyzed: number
 }
+
+export {
+  productRequiresSupplier,
+  resolveSupplierLink,
+  resolveSupplierSource,
+  type SupplierSource,
+  type SupplierSourceReason,
+  type SupplierSourceState,
+} from '@/domain/auditor/supplier-source'
 
 export function runAuditor(input: AuditorInput): AuditorReport {
   const insights = input.products.map((product) =>
@@ -83,6 +100,12 @@ export function runAuditor(input: AuditorInput): AuditorReport {
         input.integrationRuleParams ?? DEFAULT_INTEGRATION_RULE_PARAMS,
       ),
     )
+  }
+
+  // O contrapeso da supressao do "fornecedor ausente": quando o auditor deixa de
+  // acusar porque nao sabe, ele diz que nao sabe. Ver supplierSourceRules().
+  if (input.supplierSource) {
+    findings.push(...supplierSourceRules(input.supplierSource))
   }
 
   // Prioridade documentada em prioritize(). `sortFindings` continua exportado de

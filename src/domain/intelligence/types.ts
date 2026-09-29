@@ -89,6 +89,18 @@ export type IntelligenceParams = {
  *
  * Montado por quem le o banco (a camada de dados), nunca pela inteligencia.
  */
+/**
+ * O que se sabe sobre o vínculo de UM produto com fornecedor.
+ *
+ * `UNKNOWN` existe para o TIPO impedir o erro: com `boolean`, "não sei" e "não
+ * tem" colapsam em `false`, e um `if (!hasSupplier)` distraído volta a acusar
+ * todo produto de uma vez. Como união de strings, o descuido não compila.
+ *
+ * Quem decide o estado é `resolveSupplierLink()` em
+ * `@/domain/auditor/supplier-source`.
+ */
+export type SupplierLinkState = 'LINKED' | 'MISSING' | 'UNKNOWN'
+
 export type ProductSnapshot = {
   productId: string
   sku: string | null
@@ -101,7 +113,22 @@ export type ProductSnapshot = {
   sales: SaleEvent[]
   /** Prazo do fornecedor quando conhecido; null cai no default configurado. */
   supplierLeadDays: number | null
-  hasSupplier: boolean
+  /**
+   * Este produto EXIGE fornecedor?
+   *
+   * Serviço, kit montado e item digital não exigem, e acusá-los de "fornecedor
+   * ausente" seria errado por construção. O tipo do produto virá do ERP; até lá
+   * a Central usa o único sinal que tem -- ver `productRequiresSupplier()`.
+   */
+  supplierRequired: boolean
+  /**
+   * O que a fonte respondeu sobre o vínculo deste produto.
+   *
+   * `UNKNOWN` (fonte ausente ou indisponível) NUNCA vira alerta de fornecedor
+   * ausente: ausência de dado não é ausência operacional. Ver
+   * `@/domain/auditor/supplier-source`.
+   */
+  supplierLink: SupplierLinkState
   variableCosts: VariableCosts
   ads: AdsSpend | null
   /** Campos de cadastro que o auditor confere (secao 27). */

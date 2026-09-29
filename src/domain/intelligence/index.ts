@@ -153,7 +153,9 @@ function findRegistryGaps(snapshot: ProductSnapshot): RegistryGap[] {
   if (!snapshot.registry.ncm) gaps.push('NCM')
   if (snapshot.registry.weightKg === null) gaps.push('PESO')
   if (!snapshot.registry.hasDimensions) gaps.push('DIMENSOES')
-  if (!snapshot.hasSupplier) gaps.push('FORNECEDOR')
+  // Ausência de DADO não é ausência OPERACIONAL. A lacuna só existe quando a
+  // fonte respondeu (MISSING, nunca UNKNOWN) E o produto exige fornecedor.
+  if (snapshot.supplierRequired && snapshot.supplierLink === 'MISSING') gaps.push('FORNECEDOR')
   return gaps
 }
 

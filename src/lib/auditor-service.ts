@@ -10,12 +10,16 @@ import {
 } from '@/domain/intelligence'
 import {
   isMoreSevere,
+  productRequiresSupplier,
+  resolveSupplierLink,
+  resolveSupplierSource,
   runAuditor,
   toIntelligenceParams,
   type AuditFinding,
   type AuditorReport,
   type AuditSeverity,
   type IntegrationHealthInput,
+  type SupplierSource,
 } from '@/domain/auditor'
 import { loadIntegrationSettings } from '@/integrations/erp/settings'
 import { num, round2, todayISO } from '@/lib/format'
@@ -119,30 +123,32 @@ function deriveVariableCosts(rows: SalesRow[]): VariableCosts {
 export type SnapshotBuildResult = {
   snapshots: ProductSnapshot[]
   /**
-   * Verdadeiro quando a organizacao nao tem NENHUMA fonte de fornecedor.
-   * Ver a nota em `buildProductSnapshots`.
+   * Estado da fonte de fornecedor da organizacao -- ABSENT, HEALTHY ou
+   * UNAVAILABLE. Ver `@/domain/auditor/supplier-source`.
    */
-  supplierSourceMissing: boolean
+  supplierSource: SupplierSource
 }
 
 /**
  * Monta um ProductSnapshot por produto ativo.
  *
- * SOBRE `hasSupplier` -- decisao que precisa estar escrita:
+ * SOBRE FORNECEDOR -- a decisao, escrita:
  *
- * O vinculo produto-fornecedor virá do Bling (`erp_snapshots` com resource_type
- * PRODUCT_SUPPLIER). Enquanto nao houver NENHUM registro desses, "fornecedor
- * ausente" e verdade para todos os produtos ao mesmo tempo -- e um alerta que
- * aparece em 100% dos itens nao informa nada, so afoga os alertas que importam.
+ * O vinculo produto-fornecedor vem do Bling (`erp_snapshots` com resource_type
+ * PRODUCT_SUPPLIER). Este servico NAO decide se a ausencia do vinculo vira
+ * alerta: ele so coleta os sinais e entrega ao dominio, que responde a pergunta
+ * "da para afirmar que falta fornecedor?" em `resolveSupplierSource()`.
  *
- * Entao: se a organizacao tem alguma fonte de fornecedor, `hasSupplier` reflete o
- * produto individualmente. Se nao tem nenhuma, a lacuna e suprimida por produto e
- * devolvida em `supplierSourceMissing`, para a tela dizer UMA vez que falta a
- * integracao. Isto nao esconde problema: troca 500 avisos iguais por um correto.
+ * O principio esta la, e vale para toda regra que dependa de dado externo:
+ * ausencia de DADO nao e ausencia OPERACIONAL. Este arquivo ja teve a versao
+ * errada disso -- `hasSupplier: supplierSourceMissing ? true : ...`, que MENTIA
+ * "tem fornecedor" para calar o alerta. Calar pela mentira funciona ate o dia em
+ * que alguem le o campo achando que ele diz a verdade.
  */
 export async function buildProductSnapshots(
   organizationId: string,
   referenceDate: string,
+  integration: IntegrationHealthInput | null,
 ): Promise<SnapshotBuildResult> {
   const db = createAdminClient()
 
@@ -177,7 +183,11 @@ export async function buildProductSnapshots(
   const salesRows = (sales.data ?? []) as SalesRow[]
   const supplierRows = (supplierLinks.data ?? []) as SupplierLinkRow[]
 
-  const supplierSourceMissing = supplierRows.length === 0
+  // Quem decide e o dominio; aqui so se conta o que a fonte devolveu.
+  const supplierSource = resolveSupplierSource({
+    integration,
+    linksFound: supplierRows.length,
+  })
 
   // Indexa uma vez; o loop de produtos nao deve varrer os arrays inteiros.
   const balancesByProduct = new Map<string, StockBalance[]>()
@@ -233,7 +243,10 @@ export async function buildProductSnapshots(
       balances: balancesByProduct.get(product.id) ?? [],
       sales,
       supplierLeadDays: leadTimeByProduct.get(product.id) ?? null,
-      hasSupplier: supplierSourceMissing ? true : suppliersByProduct.has(product.id),
+      supplierRequired: productRequiresSupplier({
+        hasStockRecord: (balancesByProduct.get(product.id) ?? []).length > 0,
+      }),
+      supplierLink: resolveSupplierLink(supplierSource, suppliersByProduct.has(product.id)),
       variableCosts: deriveVariableCosts(productSales),
       // Sem integracao de Ads nao existe gasto de midia. Null, nunca zero: zero
       // afirmaria "investimos nada", e a regra de oportunidade usa essa diferenca.
@@ -249,7 +262,7 @@ export async function buildProductSnapshots(
   })
 
   void referenceDate
-  return { snapshots, supplierSourceMissing }
+  return { snapshots, supplierSource }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -312,7 +325,7 @@ export type AuditorRunResult = {
   autoResolved: number
   recommendations: number
   counts: AuditorReport['counts']
-  supplierSourceMissing: boolean
+  supplierSource: SupplierSource
 }
 
 type ExistingAlert = {
@@ -398,16 +411,23 @@ export async function runAuditorForOrganization(options: {
     const settings = await loadIntegrationSettings(organizationId)
     const params = toIntelligenceParams(settings)
 
-    const [{ snapshots, supplierSourceMissing }, integration] = await Promise.all([
-      buildProductSnapshots(organizationId, referenceDate),
-      loadIntegrationHealth(organizationId),
-    ])
+    // Sequencial, e nao Promise.all como era antes: a saude da integracao e um
+    // INSUMO da montagem dos snapshots agora. E ela que diz se a fonte de
+    // fornecedor pode ser acreditada, e portanto se a ausencia de vinculo vira
+    // MISSING ou UNKNOWN. Paralelizar aqui custaria a correcao do alerta.
+    const integration = await loadIntegrationHealth(organizationId)
+    const { snapshots, supplierSource } = await buildProductSnapshots(
+      organizationId,
+      referenceDate,
+      integration,
+    )
 
     const report = runAuditor({
       products: snapshots,
       params,
       referenceDate,
       integration,
+      supplierSource,
       referenceTime: new Date(),
     })
 
@@ -504,7 +524,7 @@ export async function runAuditorForOrganization(options: {
       autoResolved,
       recommendations,
       counts: report.counts,
-      supplierSourceMissing,
+      supplierSource,
     }
   } catch (error) {
     await db

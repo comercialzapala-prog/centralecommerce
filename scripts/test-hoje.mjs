@@ -734,6 +734,244 @@ async function main() {
     'descontou',
   )
 
+  /* ---------------- 13) fonte de fornecedor ---------------- */
+  console.log('\n13) fornecedor ausente so com evidencia')
+
+  // O principio sob teste: ausencia de DADO nao e ausencia OPERACIONAL. O
+  // alerta de fornecedor so pode existir quando a fonte respondeu E o produto
+  // exige fornecedor. Os quatro estados sao exercitados de ponta a ponta:
+  // fonte ausente, fonte saudavel, fonte indisponivel e produto sem exigencia.
+
+  // ESTOCADO -> exige fornecedor (productRequiresSupplier usa esse sinal).
+  const stockedRes = await restRaw(env, 'products', {
+    ...service,
+    method: 'POST',
+    body: JSON.stringify({
+      organization_id: orgId,
+      name: TAG + ' produto estocado',
+      sku: TAG + '-STK',
+      unit_cost: 10,
+      sale_price: 30,
+      active: true,
+    }),
+    headers: { Prefer: 'return=representation' },
+  })
+  const stockedId = JSON.parse(stockedRes.body)?.[0]?.id
+
+  // SEM ESTOQUE -> nao exige fornecedor. E o caso 4.
+  const serviceRes = await restRaw(env, 'products', {
+    ...service,
+    method: 'POST',
+    body: JSON.stringify({
+      organization_id: orgId,
+      name: TAG + ' item sem estoque',
+      sku: TAG + '-SVC',
+      unit_cost: 10,
+      sale_price: 30,
+      active: true,
+    }),
+    headers: { Prefer: 'return=representation' },
+  })
+  const serviceId = JSON.parse(serviceRes.body)?.[0]?.id
+
+  check(
+    'produtos do teste de fornecedor criados',
+    stockedId && serviceId ? 'criados' : 'erro',
+    'criados',
+  )
+
+  if (stockedId && serviceId) {
+    cleanup.push(async () => {
+      for (const id of [stockedId, serviceId]) {
+        await restRaw(env, 'inventory_balances?product_id=eq.' + id, { ...service, method: 'DELETE' })
+        await restRaw(env, 'recommendations?product_id=eq.' + id, { ...service, method: 'DELETE' })
+        await restRaw(env, 'alerts?product_id=eq.' + id, { ...service, method: 'DELETE' })
+        await restRaw(env, 'products?id=eq.' + id, { ...service, method: 'DELETE' })
+      }
+      await restRaw(env, 'erp_snapshots?external_id=like.' + TAG + '*', { ...service, method: 'DELETE' })
+      // Alertas de integracao tem product_id NULO: escapam da limpeza por
+      // produto e sobrevivem para a proxima execucao, onde quebram a secao 7
+      // ("integracao desligada nao gera ruido"). Eles existem porque ESTE teste
+      // mexeu na conexao, entao e este teste que os remove.
+      await restRaw(
+        env,
+        'alerts?organization_id=eq.' + orgId + '&rule_code=like.INTEGRATION_*',
+        { ...service, method: 'DELETE' },
+      )
+      // Devolve a conexao ao estado da fundacao.
+      await restRaw(env, 'erp_connections?organization_id=eq.' + orgId, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'NOT_CONFIGURED',
+          health: 'UNKNOWN',
+          last_successful_sync: null,
+        }),
+      })
+    })
+
+    await restRaw(env, 'inventory_balances', {
+      ...service,
+      method: 'POST',
+      body: JSON.stringify({
+        organization_id: orgId,
+        product_id: stockedId,
+        source: 'LOCAL',
+        physical_quantity: 5,
+        virtual_quantity: 5,
+        reserved_quantity: 0,
+      }),
+    })
+
+    /** Roda o auditor ignorando o cooldown e devolve os alertas gerados. */
+    async function runAudit() {
+      await restRaw(env, 'auditor_runs?organization_id=eq.' + orgId, {
+        ...service,
+        method: 'PATCH',
+        body: JSON.stringify({ started_at: new Date(Date.now() - 10 * 60 * 1000).toISOString() }),
+      })
+      const response = await fetch(BASE + '/api/auditor/run', {
+        method: 'POST',
+        headers: { Cookie: session.cookie },
+      })
+      const body = await response.json()
+      const rows = JSON.parse(
+        (
+          await restRaw(
+            env,
+            'alerts?select=rule_code,product_id,data_points,status&organization_id=eq.' + orgId,
+            service,
+          )
+        ).body,
+      )
+      return { status: response.status, body, rows }
+    }
+
+    // A reconciliacao FECHA o alerta que perdeu a causa (status RESOLVED), nao
+    // apaga a linha -- e isso que alimenta "Resolvidos recentemente". Entao a
+    // pergunta certa nunca e "a linha existe?", e sim "ela esta aberta?".
+    const isOpen = (row) => row.status !== 'RESOLVED' && row.status !== 'DISMISSED'
+
+    /** O alerta de cadastro daquele produto acusa fornecedor ausente, agora? */
+    function accusesSupplier(rows, productId) {
+      const alert = rows.find(
+        (row) =>
+          row.rule_code === 'REGISTRY_INCOMPLETE' && row.product_id === productId && isOpen(row),
+      )
+      const fields = alert?.data_points?.campos_ausentes ?? []
+      return fields.includes('FORNECEDOR')
+    }
+
+    /** Existe alerta ABERTO de fonte de fornecedor indisponivel? */
+    const sourceAlertOpen = (rows) =>
+      rows.some((row) => row.rule_code === 'INTEGRATION_SUPPLIER_SOURCE_UNAVAILABLE' && isOpen(row))
+
+    /* ---- caso 1: sem fonte configurada ---- */
+    const noSource = await runAudit()
+    check('sem fonte: analise roda', String(noSource.status), '200')
+    check('sem fonte: estado da fonte', String(noSource.body?.supplier_source?.state), 'ABSENT')
+    check(
+      'sem fonte: NAO acusa fornecedor ausente',
+      accusesSupplier(noSource.rows, stockedId) ? 'ACUSA' : 'silencio',
+      'silencio',
+    )
+    check(
+      'sem fonte: nenhum alerta de fonte indisponivel',
+      sourceAlertOpen(noSource.rows) ? 'GEROU' : 'nenhum',
+      'nenhum',
+    )
+
+    /* ---- caso 3a: fonte configurada, sincronizada, mas sem dado ---- */
+    await restRaw(env, 'erp_connections?organization_id=eq.' + orgId, {
+      ...service,
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'CONNECTED',
+        health: 'HEALTHY',
+        last_successful_sync: new Date().toISOString(),
+      }),
+    })
+
+    const noData = await runAudit()
+    check('sem dado: estado da fonte', String(noData.body?.supplier_source?.state), 'UNAVAILABLE')
+    check('sem dado: motivo', String(noData.body?.supplier_source?.reason), 'NO_DATA')
+    check(
+      'sem dado: NAO acusa fornecedor ausente',
+      accusesSupplier(noData.rows, stockedId) ? 'ACUSA' : 'silencio',
+      'silencio',
+    )
+    check(
+      'sem dado: avisa que a lista nao chegou',
+      sourceAlertOpen(noData.rows) ? 'avisa' : 'CALOU',
+      'avisa',
+    )
+
+    /* ---- caso 3b: fonte com dado, mas integracao degradada ---- */
+    await restRaw(env, 'erp_snapshots', {
+      ...service,
+      method: 'POST',
+      body: JSON.stringify({
+        organization_id: orgId,
+        source: 'BLING',
+        resource_type: 'PRODUCT_SUPPLIER',
+        external_id: TAG + '-LINK',
+        data: { productId: serviceId, leadTimeDays: 7 },
+      }),
+    })
+    await restRaw(env, 'erp_connections?organization_id=eq.' + orgId, {
+      ...service,
+      method: 'PATCH',
+      body: JSON.stringify({ health: 'DOWN' }),
+    })
+
+    const degraded = await runAudit()
+    check('degradada: estado da fonte', String(degraded.body?.supplier_source?.state), 'UNAVAILABLE')
+    check('degradada: motivo', String(degraded.body?.supplier_source?.reason), 'SYNC_ERROR')
+    check(
+      'degradada: NAO acusa fornecedor ausente',
+      accusesSupplier(degraded.rows, stockedId) ? 'ACUSA' : 'silencio',
+      'silencio',
+    )
+    check(
+      'degradada: alerta de integracao existe',
+      degraded.rows.some((r) => r.rule_code === 'INTEGRATION_DEGRADED') ? 'existe' : 'AUSENTE',
+      'existe',
+    )
+
+    /* ---- caso 2: fonte saudavel, com dado, produto sem vinculo ---- */
+    await restRaw(env, 'erp_connections?organization_id=eq.' + orgId, {
+      ...service,
+      method: 'PATCH',
+      body: JSON.stringify({
+        health: 'HEALTHY',
+        status: 'CONNECTED',
+        last_successful_sync: new Date().toISOString(),
+      }),
+    })
+
+    const healthy = await runAudit()
+    check('saudavel: estado da fonte', String(healthy.body?.supplier_source?.state), 'HEALTHY')
+    check(
+      'saudavel: ACUSA fornecedor ausente no produto estocado',
+      accusesSupplier(healthy.rows, stockedId) ? 'acusa' : 'CALOU',
+      'acusa',
+    )
+
+    /* ---- caso 4: produto que nao exige fornecedor ---- */
+    check(
+      'saudavel: produto sem estoque NAO e acusado',
+      accusesSupplier(healthy.rows, serviceId) ? 'ACUSA' : 'silencio',
+      'silencio',
+    )
+    // Nao basta parar de gerar: o alerta que existia tem de ser FECHADO sozinho
+    // quando a fonte volta a responder. E a prova de que a supressao tem volta.
+    check(
+      'saudavel: alerta de fonte indisponivel foi fechado sozinho',
+      sourceAlertOpen(healthy.rows) ? 'CONTINUA ABERTO' : 'fechado',
+      'fechado',
+    )
+  }
+
   /* ---------------- 12) visto que piorou volta para a lista ---------------- */
   console.log('\n12) visto que piorou volta para a lista')
 

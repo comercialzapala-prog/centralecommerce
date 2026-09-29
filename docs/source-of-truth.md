@@ -82,3 +82,47 @@ Se o Bling faz, a Central **lê e interpreta**. O exemplo da seção 38 é o pad
 - `docs/estoque-dupla-baixa.md` — o conflito concreto entre o estoque local de
   hoje e o do Bling, e a transição sem dupla baixa.
 - `src/integrations/README.md` — como a camada de integração está montada.
+
+## Quando o auditor pode afirmar que falta fornecedor
+
+Decidido em 2026-09-29. O princípio vale para **toda** regra que dependa de dado
+que vem de fora:
+
+> Ausência de **dado** não é ausência **operacional**.
+
+"Não recebi a lista de fornecedores" e "este produto não tem fornecedor" são
+afirmações diferentes, e só a segunda é problema da operação. Tratar a primeira
+como se fosse a segunda produz um alerta em 100% dos produtos, todos falsos.
+
+Por isso o auditor não olha o campo vazio: ele pergunta antes se a fonte tinha
+**como** responder. O estado é explícito, não inferido —
+`src/domain/auditor/supplier-source.ts`.
+
+| Estado da fonte | Quando | O que o auditor faz |
+|---|---|---|
+| `ABSENT` | nenhuma conexão configurada (a Fase A inteira) | **não** alerta sobre fornecedor, nem por produto nem uma vez |
+| `HEALTHY` | conectada, sincronizada e com vínculos | **único** estado em que "produto sem fornecedor" é alertado |
+| `UNAVAILABLE` | conectada, mas sem resposta confiável | não afirma ausência; o alerta é sobre a **fonte** |
+
+Os motivos de `UNAVAILABLE` e quem fala por cada um — nenhum fica mudo, e nenhum
+é dito duas vezes:
+
+| Motivo | Alerta |
+|---|---|
+| `DISCONNECTED` | `INTEGRATION_DISCONNECTED` |
+| `TOKEN_EXPIRED` | `INTEGRATION_TOKEN_EXPIRED` |
+| `SYNC_ERROR` | `INTEGRATION_DEGRADED` |
+| `NEVER_SYNCED` | `INTEGRATION_OUT_OF_SYNC` |
+| `NO_DATA` | `INTEGRATION_SUPPLIER_SOURCE_UNAVAILABLE` |
+
+`NO_DATA` — sincronizou bem e não veio um vínculo sequer — é o caso que ninguém
+percebia: para todo o resto do sistema parece normalidade.
+
+**Produto que não exige fornecedor** nunca é alertado. Serviço, kit e item
+digital não têm reposição a planejar. O tipo virá do ERP; até lá a Central usa o
+único sinal que ela própria possui — o produto ser **estocado** — em
+`productRequiresSupplier()`. A consequência assumida: produto recém-cadastrado,
+ainda sem saldo, não gera o alerta. É o lado conservador do princípio, e é
+preferível ao contrário, que acusaria todo cadastro novo.
+
+Coberto por `npm run test:hoje`, seção 13, nos quatro estados.
