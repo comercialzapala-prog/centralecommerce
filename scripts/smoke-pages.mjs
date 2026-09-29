@@ -57,6 +57,19 @@ const ENDPOINTS = [
   // A execucao do auditor exige sessao. Sem cookie tem de ser 401 -- se virar
   // 200, qualquer um passa a poder disparar a analise da operacao.
   { path: '/api/auditor/run', method: 'POST', expectStatus: [401] },
+  // O cron se autentica por segredo, nao por sessao. Sem o Bearer certo tem de
+  // ser 401 -- se virar 200, qualquer um dispara a analise de TODAS as
+  // organizacoes so por conhecer o caminho. O 503 e a outra resposta legitima:
+  // e o que a rota devolve quando CRON_SECRET nao esta configurada.
+  { path: '/api/cron/auditor', method: 'GET', expectStatus: [401, 503] },
+  // Bearer errado tem de cair no mesmo 401 do Bearer ausente.
+  {
+    path: '/api/cron/auditor',
+    method: 'GET',
+    label: 'GET /api/cron/auditor (bearer errado)',
+    headers: { Authorization: 'Bearer segredo-errado' },
+    expectStatus: [401, 503],
+  },
 ]
 
 const FAILURE_MARKERS = [
@@ -116,11 +129,14 @@ async function checkRoute(route, cookie) {
 }
 
 async function checkEndpoint(endpoint) {
-  const label = `${endpoint.method} ${endpoint.path}`
+  const label = endpoint.label ?? `${endpoint.method} ${endpoint.path}`
   try {
     const response = await fetch(`${BASE}${endpoint.path}`, {
       method: endpoint.method,
-      headers: endpoint.body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(endpoint.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(endpoint.headers ?? {}),
+      },
       body: endpoint.body,
     })
     if (endpoint.expectStatus.includes(response.status)) {

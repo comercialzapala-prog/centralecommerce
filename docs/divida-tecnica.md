@@ -81,3 +81,39 @@ A falha é explícita (`ServiceRoleNotConfiguredError`), não silenciosa.
 
 Verificação de que ela não vaza para o cliente: `npm run test:auth` varre
 `.next/static` e o HTML servido a cada execução.
+
+**Estado:** configurada em Production na Vercel em 2026-09-29, como *Sensitive*.
+
+### 6. `CRON_SECRET` na Vercel
+
+Também **requisito de deploy**, pelo mesmo motivo de existir: `GET
+/api/cron/auditor` roda a análise de *todas* as organizações. Sem segredo ela
+seria um botão público de carga para quem descobrisse o caminho.
+
+Sem a variável a rota responde **503 e não executa nada** — recusar é a falha
+segura; rodar sem saber quem chamou não é.
+
+O Vercel envia `Authorization: Bearer $CRON_SECRET` sozinho quando a variável
+existe no projeto, então não há nada a configurar do lado do agendador.
+
+**Estado:** configurada em Production em 2026-09-29, valor diferente do usado em
+`.env.local`.
+
+### 7. Frequência do cron
+
+`vercel.json` agenda `0 10 * * *` — 10:00 UTC, **07:00 de Brasília**, uma vez por
+dia. Duas decisões embutidas:
+
+- **Uma vez por dia** é o que todo plano do Vercel aceita, o Hobby inclusive.
+  Se o projeto estiver em Pro e você quiser a análise mais de uma vez, é só mudar
+  a expressão — o código não muda.
+- **07:00**, antes do expediente, para a página já estar atualizada quando você
+  abrir. No Hobby o disparo pode atrasar até uma hora; por isso o horário tem
+  folga em vez de ser colado no início do dia.
+
+O cron só dispara em deployment de **produção**. Preview não executa — e isso é
+desejável: dois ambientes analisando o mesmo banco brigariam pela reconciliação.
+
+O botão "Atualizar análise" continua existindo para a execução sob demanda, com
+o cooldown de 30s. O cron tem a própria guarda, de 5 minutos, contra disparo
+duplicado.
