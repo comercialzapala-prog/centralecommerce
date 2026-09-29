@@ -21,10 +21,15 @@ export default function AppError({
   const message = error.message ?? 'Erro desconhecido.'
 
   // Em producao o Next esconde a mensagem real do servidor e deixa so o
-  // digest. Quando nao da para identificar a causa, a hipotese mais provavel
-  // continua sendo banco sem as migrations -- entao o aviso aparece de todo
-  // jeito, em vez de deixar a tela sem saida.
-  const redacted = !error.digest ? false : /server components render/i.test(message) || message.trim() === ''
+  // digest -- e o texto que chega ao cliente vem MINIFICADO ("Minified React
+  // error #441"), nao em ingles por extenso. Testar so por
+  // /server components render/ nunca casava em producao e a tela ficava sem
+  // nenhuma pista (incidente de 2026-09-29). Sem causa identificavel o aviso
+  // aparece de todo jeito, apontando as duas hipoteses e o digest.
+  const redacted = !error.digest
+    ? false
+    : /server components render|minified react error #441|react.dev.errors.441/i.test(message) ||
+      message.trim() === ''
 
   const missingSchema =
     redacted ||
@@ -49,11 +54,13 @@ export default function AppError({
               <div className="rounded-lg border bg-card p-3 text-sm">
                 <p className="font-medium">
                   {redacted
-                    ? 'Causa mais provável: o banco está sem o schema da V2.'
+                    ? 'A mensagem real ficou no servidor. Procure a referência abaixo nos logs.'
                     : 'O banco está sem o schema da V2.'}
                 </p>
                 <p className="mt-1 text-muted-foreground">
-                  Aplique as migrations e recarregue:
+                  {redacted
+                    ? 'Duas causas comuns: o banco sem as migrations, ou o deploy mais antigo que o banco (RLS endurecida contra código que ainda consulta como anon). Se for a segunda, o caminho é publicar o código, não mexer no banco. Se for a primeira:'
+                    : 'Aplique as migrations e recarregue:'}
                 </p>
                 <pre className="mt-2 overflow-x-auto rounded bg-muted px-2 py-1.5 text-xs">
                   npx supabase db push
