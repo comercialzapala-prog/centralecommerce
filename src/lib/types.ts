@@ -186,6 +186,32 @@ export type Investment = {
   updated_at: string | null
 }
 
+export type ProductCatalogSpec = {
+  asin?: string | null
+  ean?: string | null
+  ncm?: string | null
+  supplier_sku?: string | null
+  net_weight_grams?: number | null
+  gross_weight_grams?: number | null
+  shipping_cost?: number | string
+  packaging_cost?: number | string
+  marketplace_percent?: number | string
+  tax_percent?: number | string
+  voltage?: string | null
+  capacity?: string | null
+  material_primary?: string | null
+  material_secondary?: string | null
+  color?: string | null
+  included_items?: string | null
+  warranty_months?: number | null
+  origin_country?: string | null
+  product_type?: string | null
+  description?: string | null
+  differentials?: string | null
+  care_instructions?: string | null
+  related_eans?: string | null
+}
+
 export type Product = {
   id: string
   sku: string | null
@@ -196,9 +222,9 @@ export type Product = {
   active: boolean
   created_at: string
   updated_at: string | null
-}
+} & ProductCatalogSpec
 
-/** Linha da view `v_product_stats`. */
+/** Linha da view `v_product_stats` enriquecida com ficha técnica e frete/taxas acumulados. */
 export type ProductStats = {
   product_id: string
   sku: string | null
@@ -219,7 +245,14 @@ export type ProductStats = {
   margin_amount: number | string
   margin_percent: number | string
   orders_count: number | string
-}
+  shipping_amount?: number | string
+  fees_amount?: number | string
+  tax_amount?: number | string
+  packaging_amount?: number | string
+  extra_costs_amount?: number | string
+  net_margin_amount?: number | string
+  net_margin_percent?: number | string
+} & ProductCatalogSpec
 
 /** Linha da view `v_order_result`. */
 export type OrderRow = {

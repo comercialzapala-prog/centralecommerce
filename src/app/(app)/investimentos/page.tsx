@@ -191,7 +191,28 @@ export default async function InvestmentsPage() {
                             label=""
                             size="icon-sm"
                             icon={<Ban />}
+                            title={`Cancelar investimento "${investment.description}"?`}
                             confirmMessage={`Cancelar "${investment.description}"? Ele sai do cálculo do break-even mas continua no histórico.`}
+                            details={[
+                              {
+                                label: 'Investimento',
+                                value: investment.description,
+                                hint: formatDate(investment.investment_date),
+                                span: 2,
+                              },
+                              {
+                                label: 'Valor',
+                                value: formatCurrency(investment.amount),
+                                hint: `Status atual: ${investment.status}`,
+                                tone: 'warning',
+                              },
+                              {
+                                label: 'Efeito no Break-even (0/50)',
+                                value: 'Retirado do total a recuperar',
+                                hint: 'Permanece visível na listagem como CANCELADO.',
+                                tone: 'positive',
+                              },
+                            ]}
                           />
                         ) : null}
                       </div>

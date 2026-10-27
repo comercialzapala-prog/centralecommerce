@@ -17,10 +17,12 @@ import {
   ValidationError,
   type ActionState,
 } from '@/lib/actions'
-import { parseAmount } from '@/lib/format'
 // Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
 // O alias mantem os call sites identicos -- o que muda e a garantia.
 import { createAuthedClient as createClient } from '@/lib/auth'
+import { calculateOrderProductCosts } from '@/lib/finance'
+import { num, parseAmount, round2 } from '@/lib/format'
+import { loadProductCatalogSpecs } from '@/lib/product-catalog'
 import { ORDER_STATUSES } from '@/lib/types'
 
 function revalidateSales() {
@@ -28,6 +30,7 @@ function revalidateSales() {
   revalidatePath('/produtos', 'layout')
   revalidatePath('/movimentacoes')
   revalidatePath('/dashboard')
+  revalidatePath('/hoje')
 }
 
 /** Cabecalho do pedido. gross_amount e total_amount sao calculados no banco. */
@@ -99,6 +102,9 @@ function readItems(formData: FormData): IncomingItem[] {
  * Secao 23: a venda cria o PEDIDO e os ITENS. A saida de mercadoria vem de
  * brinde -- o trigger `order_items_sync_stock` cria um stock_movement do tipo
  * VENDA para cada item, entao o estoque baixa sozinho e nunca fica divergente.
+ *
+ * Alem disso, se o frete/taxas do pedido nao foram digitados manualmente,
+ * soma automaticamente o frete e as taxas configuradas nos produtos vendidos.
  */
 export async function createOrder(_prev: ActionState, formData: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -107,6 +113,34 @@ export async function createOrder(_prev: ActionState, formData: FormData): Promi
 
     if (items.length === 0) {
       return actionError('Adicione pelo menos um produto ao pedido.')
+    }
+
+    const specs = await loadProductCatalogSpecs()
+    const autoCosts = calculateOrderProductCosts(
+      items.map((item) => {
+        const spec = specs.get(item.product_id)
+        return {
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          shippingPerUnit: num(spec?.shipping_cost),
+          packagingPerUnit: num(spec?.packaging_cost),
+          marketplacePercent: num(spec?.marketplace_percent),
+          taxPercent: num(spec?.tax_percent),
+        }
+      }),
+    )
+
+    if (header.shipping_cost === 0 && autoCosts.shippingCost > 0) {
+      header.shipping_cost = autoCosts.shippingCost
+    }
+    if (header.packaging_cost === 0 && autoCosts.packagingCost > 0) {
+      header.packaging_cost = autoCosts.packagingCost
+    }
+    if (header.marketplace_fee === 0 && autoCosts.marketplaceFee > 0) {
+      header.marketplace_fee = autoCosts.marketplaceFee
+    }
+    if (header.tax_amount === 0 && autoCosts.taxAmount > 0) {
+      header.tax_amount = autoCosts.taxAmount
     }
 
     const supabase = await createClient()
@@ -184,6 +218,38 @@ export async function addOrderItem(_prev: ActionState, formData: FormData): Prom
     })
 
     if (error) return actionError(describeDbError(error))
+
+    // Soma automaticamente o frete e embalagem unitária do produto adicionado ao pedido.
+    const specs = await loadProductCatalogSpecs()
+    const spec = specs.get(productId)
+    const itemCosts = calculateOrderProductCosts([
+      {
+        quantity,
+        unitPrice,
+        shippingPerUnit: num(spec?.shipping_cost),
+        packagingPerUnit: num(spec?.packaging_cost),
+        marketplacePercent: num(spec?.marketplace_percent),
+        taxPercent: num(spec?.tax_percent),
+      },
+    ])
+
+    if (itemCosts.shippingCost > 0 || itemCosts.packagingCost > 0) {
+      const { data: currentOrder } = await supabase
+        .from('orders')
+        .select('shipping_cost,packaging_cost')
+        .eq('id', orderId)
+        .maybeSingle()
+
+      if (currentOrder) {
+        await supabase
+          .from('orders')
+          .update({
+            shipping_cost: round2(num(currentOrder.shipping_cost) + itemCosts.shippingCost),
+            packaging_cost: round2(num(currentOrder.packaging_cost) + itemCosts.packagingCost),
+          })
+          .eq('id', orderId)
+      }
+    }
 
     revalidateSales()
     return actionOk('Item adicionado.')

@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import {
-  AlertTriangle,
   CheckCircle2,
   Circle,
   Clock,
@@ -11,6 +10,7 @@ import {
   XCircle,
 } from 'lucide-react'
 
+import { BoxGrid } from '@/components/BoxGrid'
 import { MetricCard, type MetricTone } from '@/components/MetricCard'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -37,13 +37,6 @@ import { isServiceRoleConfigured } from '@/lib/supabase/admin'
 
 /**
  * OBSERVABILIDADE DA INTEGRACAO (secoes 33 e 41)
- *
- * Tudo aqui sai do NOSSO banco (secao 4): a pagina abre igual com o ERP fora do
- * ar. Nenhuma chamada ao Bling acontece ao renderizar.
- *
- * Na Fase A esta tela tem um segundo papel: dizer exatamente o que falta para
- * conectar. O checklist e calculado no servidor e expoe apenas BOOLEANOS --
- * nunca o valor de credencial nenhuma (secoes 12 e 34).
  */
 
 export const dynamic = 'force-dynamic'
@@ -71,9 +64,6 @@ const MODE_LABEL: Record<string, string> = {
 }
 
 export default async function BlingIntegrationPage() {
-  // A organizacao vem do VINCULO do usuario logado, nao de "a primeira do banco".
-  // E o que continua correto quando existir mais de uma organizacao -- e o que
-  // garante que ninguem ve a integracao de outra empresa.
   const { membership } = await requireMembership()
   const organizationId = membership.organizationId
 
@@ -85,8 +75,6 @@ export default async function BlingIntegrationPage() {
   ])
 
   const status = connection?.status ?? 'NOT_CONFIGURED'
-  // `is_degraded` vem calculado da view: comparar datas com o relogio durante a
-  // renderizacao seria funcao impura.
   const degraded =
     connection?.health === 'DEGRADED' || connection?.health === 'DOWN' || connection?.is_degraded === true
 
@@ -106,28 +94,38 @@ export default async function BlingIntegrationPage() {
       />
 
       {degraded ? (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
-          <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div className="text-sm">
-            <p className="font-medium">Bling temporariamente indisponível.</p>
-            <p className="mt-1 text-muted-foreground">
-              A integração acumulou {formatNumber(connection?.consecutive_failures ?? 0)} falhas
-              consecutivas e as sincronizações não críticas estão suspensas
-              {connection?.degraded_until
-                ? ` até ${formatDateTime(connection.degraded_until)}`
-                : ''}
-              . Isso é intencional: insistir durante a indisponibilidade só consome a cota de
-              requisições.
-            </p>
-          </div>
-        </div>
+        <BoxGrid
+          columns={2}
+          items={[
+            {
+              label: 'Disponibilidade do ERP',
+              value: 'Bling temporariamente indisponível',
+              hint: `${formatNumber(connection?.consecutive_failures ?? 0)} falha(s) consecutiva(s)`,
+              tone: 'warning',
+            },
+            {
+              label: 'Proteção de cota ativa',
+              value: connection?.degraded_until
+                ? `Sincronizações suspensas até ${formatDateTime(connection.degraded_until)}`
+                : 'Sincronizações não críticas suspensas temporariamente',
+              hint: 'Insistir durante a indisponibilidade apenas consome a cota diária de requisições.',
+              tone: 'accent',
+            },
+          ]}
+        />
       ) : null}
 
       {connection?.last_error ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
-          <p className="text-sm font-medium text-destructive">Último erro registrado</p>
-          <p className="mt-1 text-sm text-muted-foreground">{connection.last_error}</p>
-        </div>
+        <BoxGrid
+          columns={1}
+          items={[
+            {
+              label: 'Último erro registrado na integração',
+              value: connection.last_error,
+              tone: 'negative',
+            },
+          ]}
+        />
       ) : null}
 
       {/* ---------------- Secao 33: os numeros do painel ---------------- */}
@@ -177,45 +175,57 @@ export default async function BlingIntegrationPage() {
       </div>
 
       {/* ---------------- Configuracao corrente ---------------- */}
-      <section className="rounded-xl border bg-card p-4">
-        <h2 className="mb-3 text-sm font-semibold">Configuração atual</h2>
-        <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Provider ativo" value={resolveProviderName()} />
-          <Field label="Modo de automação" value={MODE_LABEL[settings.automationMode] ?? settings.automationMode} />
-          <Field label="Webhooks" value={settings.webhooksEnabled ? 'Habilitados' : 'Desligados'} />
-          <Field
-            label="Escopos concedidos"
-            value={connection?.scopes?.length ? connection.scopes.join(', ') : 'Nenhum'}
-          />
-          <Field
-            label="Token de acesso"
-            value={
-              connection?.has_access_token
+      <section className="space-y-3 rounded-xl border bg-card p-4">
+        <h2 className="text-sm font-semibold">Configuração atual</h2>
+        <BoxGrid
+          columns={3}
+          items={[
+            {
+              label: 'Provider ativo',
+              value: resolveProviderName(),
+              tone: 'accent',
+            },
+            {
+              label: 'Modo de automação',
+              value: MODE_LABEL[settings.automationMode] ?? settings.automationMode,
+            },
+            {
+              label: 'Webhooks',
+              value: settings.webhooksEnabled ? 'Habilitados' : 'Desligados',
+              tone: settings.webhooksEnabled ? 'positive' : 'warning',
+            },
+            {
+              label: 'Escopos concedidos',
+              value: connection?.scopes?.length ? connection.scopes.join(', ') : 'Nenhum',
+            },
+            {
+              label: 'Token de acesso',
+              value: connection?.has_access_token
                 ? connection.access_token_expires_at
                   ? `Guardado · expira ${formatDateTime(connection.access_token_expires_at)}`
                   : 'Guardado'
-                : 'Nenhum'
-            }
-          />
-          <Field
-            label="Limite de requisições"
-            value={
-              `${formatNumber(settings.apiRequestsPerSecond)}/s · ` +
-              (settings.apiDailyRequestLimit === null
-                ? 'diário não informado'
-                : `${formatNumber(settings.apiDailyRequestLimit)}/dia`)
-            }
-          />
-        </dl>
-        <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+                : 'Nenhum',
+              tone: connection?.has_access_token ? 'positive' : 'neutral',
+            },
+            {
+              label: 'Limite de requisições',
+              value:
+                `${formatNumber(settings.apiRequestsPerSecond)}/s · ` +
+                (settings.apiDailyRequestLimit === null
+                  ? 'diário não informado'
+                  : `${formatNumber(settings.apiDailyRequestLimit)}/dia`),
+            },
+          ]}
+        />
+        <p className="border-t pt-3 text-xs text-muted-foreground">
           A contagem de requisições por dia passa a ser registrada quando a sincronização estiver
           ativa — hoje nenhuma requisição é enviada ao Bling.
         </p>
       </section>
 
       {/* ---------------- Secao 39: o que falta para conectar ---------------- */}
-      <section className="rounded-xl border bg-card p-4">
-        <div className="mb-3 flex items-start justify-between gap-2">
+      <section className="space-y-3 rounded-xl border bg-card p-4">
+        <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold">Pré-requisitos para conectar</h2>
             <p className="text-xs text-muted-foreground">
@@ -229,24 +239,18 @@ export default async function BlingIntegrationPage() {
           </Badge>
         </div>
 
-        <ul className="space-y-2">
-          {checklist.map((item) => (
-            <li key={item.label} className="flex items-start gap-2 text-sm">
-              {item.done ? (
-                <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              ) : (
-                <Circle size={16} className="mt-0.5 shrink-0 text-muted-foreground" />
-              )}
-              <div>
-                <span className={item.done ? '' : 'font-medium'}>{item.label}</span>
-                <p className="text-xs text-muted-foreground">{item.hint}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <BoxGrid
+          columns={2}
+          items={checklist.map((item) => ({
+            label: item.done ? 'Configurado' : 'Pendente',
+            value: item.label,
+            hint: item.hint,
+            tone: item.done ? ('positive' as const) : ('warning' as const),
+          }))}
+        />
 
-        <div className="mt-4 flex items-start gap-3 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
-          <ShieldCheck size={16} className="mt-0.5 shrink-0" />
+        <div className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
           <p>
             Os tokens ficam cifrados e a tabela <code>erp_connections</code> não é acessível pelo
             navegador — esta tela lê a view <code>v_erp_connection_status</code>, que não projeta
@@ -316,23 +320,8 @@ export default async function BlingIntegrationPage() {
   )
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5">{value}</dd>
-    </div>
-  )
-}
-
 type ChecklistItem = { label: string; hint: string; done: boolean }
 
-/**
- * Checklist da Fase B.
- *
- * Retorna somente booleanos. Nenhuma funcao chamada aqui devolve o valor da
- * credencial -- `getBlingCredentials()` e usada apenas para saber se existe.
- */
 function buildChecklist(): ChecklistItem[] {
   return [
     {

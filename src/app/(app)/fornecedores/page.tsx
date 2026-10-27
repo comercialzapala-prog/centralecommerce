@@ -134,11 +134,36 @@ export default async function SuppliersPage() {
                       label=""
                       size="icon-sm"
                       icon={supplier.active ? <EyeOff /> : <Eye />}
+                      title={
+                        supplier.active
+                          ? `Desativar fornecedor ${supplier.name}?`
+                          : `Reativar fornecedor ${supplier.name}?`
+                      }
                       confirmMessage={
                         supplier.active
                           ? `Desativar ${supplier.name}? O histórico de pagamentos é preservado.`
                           : `Reativar ${supplier.name}?`
                       }
+                      details={[
+                        {
+                          label: 'Fornecedor',
+                          value: supplier.name,
+                          hint: supplier.document ? `Doc: ${supplier.document}` : 'Sem documento informado',
+                          tone: 'accent',
+                        },
+                        {
+                          label: 'Total pago acumulado',
+                          value: formatCurrency(supplier.total_paid),
+                          hint: `${formatNumber(supplier.entries_count)} lançamento(s)`,
+                        },
+                        {
+                          label: 'Histórico de pagamentos',
+                          value: 'Preservado integralmente',
+                          hint: 'Todos os pagamentos e vínculos com centros de custo continuam auditáveis.',
+                          tone: 'positive',
+                          span: 2,
+                        },
+                      ]}
                     />
                   </TableCell>
                 </TableRow>

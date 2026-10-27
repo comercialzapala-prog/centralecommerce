@@ -444,3 +444,51 @@ export function resultTone(result: number, revenue: number): 'positive' | 'warni
   if (revenue === 0 && result === 0) return 'warning'
   return 'positive'
 }
+
+export type OrderItemCostInput = {
+  quantity: number
+  unitPrice: number
+  shippingPerUnit?: number
+  packagingPerUnit?: number
+  marketplacePercent?: number
+  taxPercent?: number
+}
+
+export type OrderProductCosts = {
+  shippingCost: number
+  packagingCost: number
+  marketplaceFee: number
+  taxAmount: number
+}
+
+/**
+ * Soma automática de frete e taxas variáveis em cima dos produtos vendidos no pedido.
+ *
+ * Regra única:
+ *   - Frete do pedido     = soma(quantidade * frete_unitario_do_produto)
+ *   - Embalagem do pedido = soma(quantidade * embalagem_unitaria_do_produto)
+ *   - Comissão estimada   = soma(receita_bruta_do_item * %_comissao_do_produto)
+ *   - Imposto estimado    = soma(receita_bruta_do_item * %_imposto_do_produto)
+ */
+export function calculateOrderProductCosts(items: OrderItemCostInput[]): OrderProductCosts {
+  let shippingCost = 0
+  let packagingCost = 0
+  let marketplaceFee = 0
+  let taxAmount = 0
+
+  for (const item of items) {
+    const qty = Math.max(0, num(item.quantity))
+    const gross = qty * Math.max(0, num(item.unitPrice))
+    shippingCost += qty * Math.max(0, num(item.shippingPerUnit))
+    packagingCost += qty * Math.max(0, num(item.packagingPerUnit))
+    marketplaceFee += gross * (Math.max(0, num(item.marketplacePercent)) / 100)
+    taxAmount += gross * (Math.max(0, num(item.taxPercent)) / 100)
+  }
+
+  return {
+    shippingCost: round2(shippingCost),
+    packagingCost: round2(packagingCost),
+    marketplaceFee: round2(marketplaceFee),
+    taxAmount: round2(taxAmount),
+  }
+}

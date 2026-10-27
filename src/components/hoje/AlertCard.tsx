@@ -1,5 +1,6 @@
 import { CircleAlert, Info, TriangleAlert } from 'lucide-react'
 
+import { BoxGrid } from '@/components/BoxGrid'
 import { AlertResolveButton } from '@/components/hoje/AlertResolveButton'
 import { AlertStatusActions } from '@/components/hoje/AlertStatusActions'
 import { Badge } from '@/components/ui/badge'
@@ -10,41 +11,29 @@ import type { AlertRow } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import type { AuditDomain } from '@/domain/auditor'
 
-/**
- * Cartao de um alerta (secao 29).
- *
- * Mostra os oito campos que a secao 29 exige, e nenhum deles e opcional por
- * capricho de layout: severidade, titulo, explicacao, impacto financeiro quando
- * calculavel, produto/SKU/canal, evidencia, acao recomendada e para onde ir.
- *
- * A EVIDENCIA fica num `<details>` fechado. Ela precisa estar na tela -- e o que
- * permite conferir o alerta em vez de acreditar nele -- mas aberta por padrao
- * transformaria a lista num paredao de numeros, que e exatamente o que o /hoje
- * existe para evitar.
- *
- * Nenhum numero e calculado aqui. Tudo ja veio calculado pelo auditor.
- */
-
 const SEVERITY_STYLE = {
   CRITICO: {
     icon: CircleAlert,
-    border: 'border-l-rose-500',
+    border: 'border-rose-500/30 bg-rose-500/[0.03]',
     text: 'text-rose-600 dark:text-rose-400',
     badge: 'destructive' as const,
+    tone: 'danger' as const,
     label: 'Crítico',
   },
   IMPORTANTE: {
     icon: TriangleAlert,
-    border: 'border-l-amber-500',
+    border: 'border-amber-500/30 bg-amber-500/[0.03]',
     text: 'text-amber-600 dark:text-amber-400',
     badge: 'outline' as const,
+    tone: 'warning' as const,
     label: 'Atenção',
   },
   OPORTUNIDADE: {
     icon: Info,
-    border: 'border-l-sky-500',
+    border: 'border-sky-500/30 bg-sky-500/[0.03]',
     text: 'text-sky-600 dark:text-sky-400',
     badge: 'secondary' as const,
+    tone: 'accent' as const,
     label: 'Informativo',
   },
 }
@@ -64,19 +53,27 @@ export function AlertCard({
   const Icon = style.icon
   const impact = alert.financial_impact === null ? null : Number(alert.financial_impact)
   const resolved = alert.status === 'RESOLVED' || alert.status === 'DISMISSED'
+  const evidenceEntries = Object.entries(alert.data_points ?? {})
 
   return (
     <article
       className={cn(
-        'rounded-lg border border-l-4 bg-card p-3.5',
+        'rounded-xl border bg-card p-4 shadow-sm transition-colors',
         style.border,
         resolved && 'opacity-65',
       )}
     >
       <div className="flex items-start gap-3">
-        <Icon size={16} className={cn('mt-0.5 shrink-0', style.text)} />
+        <div
+          className={cn(
+            'flex size-9 shrink-0 items-center justify-center rounded-xl border bg-background',
+            style.text,
+          )}
+        >
+          <Icon size={16} />
+        </div>
 
-        <div className="min-w-0 flex-1 space-y-2">
+        <div className="min-w-0 flex-1 space-y-3">
           {/* Cabecalho: severidade, dominio, status, identificacao do produto */}
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant={style.badge} className="uppercase">
@@ -94,55 +91,54 @@ export function AlertCard({
             </span>
           </div>
 
-          <h3 className="text-sm font-semibold leading-snug">{alert.title}</h3>
+          <div>
+            <h3 className="text-sm font-semibold leading-snug">{alert.title}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{alert.what_happened}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{alert.why_it_matters}</p>
+          </div>
 
-          {/* O QUE ACONTECEU + POR QUE IMPORTA */}
-          <p className="text-sm text-muted-foreground">{alert.what_happened}</p>
-          <p className="text-xs text-muted-foreground">{alert.why_it_matters}</p>
+          <BoxGrid
+            columns={3}
+            items={[
+              ...(impact !== null
+                ? [
+                    {
+                      label: IMPACT_KIND_LABEL[alert.impact_kind ?? ''] ?? 'Impacto estimado',
+                      value: formatCurrency(impact),
+                      tone: style.tone,
+                    },
+                  ]
+                : []),
+              ...(alert.suggested_action
+                ? [
+                    {
+                      label: 'Ação recomendada',
+                      value: alert.suggested_action,
+                      span: (impact !== null ? 2 : 2) as 1 | 2,
+                    },
+                  ]
+                : []),
+            ]}
+          />
 
-          {/* IMPACTO FINANCEIRO -- so quando calculavel. "—" seria ruido. */}
-          {impact !== null ? (
-            <p className="text-sm">
-              <span className={cn('font-semibold tabular-nums', style.text)}>
-                {formatCurrency(impact)}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {' '}
-                de {IMPACT_KIND_LABEL[alert.impact_kind ?? ''] ?? 'impacto estimado'}
-              </span>
-            </p>
-          ) : null}
-
-          {/* ACAO RECOMENDADA */}
-          {alert.suggested_action ? (
-            <p className="rounded-md bg-muted/60 px-2.5 py-1.5 text-xs">
-              <span className="font-medium">Sugestão: </span>
-              {alert.suggested_action}
-            </p>
-          ) : null}
-
-          {/* EVIDENCIA */}
-          {showEvidence && Object.keys(alert.data_points ?? {}).length > 0 ? (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                Evidência usada
-              </summary>
-              <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
-                {Object.entries(alert.data_points).map(([key, value]) => (
-                  <div key={key} className="flex justify-between gap-2 border-b border-dashed py-0.5">
-                    <dt className="text-muted-foreground">{key.replace(/_/g, ' ')}</dt>
-                    <dd className="text-right font-mono tabular-nums">{renderValue(value)}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {/* EVIDENCIA EM BOXGRID */}
+          {showEvidence && evidenceEntries.length > 0 ? (
+            <div className="space-y-1.5">
+              <BoxGrid
+                columns={3}
+                items={evidenceEntries.map(([key, value]) => ({
+                  label: key.replace(/_/g, ' '),
+                  value: renderValue(value),
+                  mono: true,
+                }))}
+              />
+              <p className="text-[11px] text-muted-foreground">
                 Regra <code>{alert.rule_code}</code> · visto por último em{' '}
                 {formatDateTime(alert.last_seen_at)}
               </p>
-            </details>
+            </div>
           ) : null}
 
-          {/* PARA ONDE IR -- e, no mesmo clique, "ja vi este" (ver openAlert) */}
           {alert.action_href ? (
             <AlertResolveButton alertId={alert.id} action={openTarget} />
           ) : null}
@@ -154,7 +150,6 @@ export function AlertCard({
   )
 }
 
-/** Valor da evidencia em texto. Null vira "—", nunca 0 nem "false". */
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return '—'
   if (typeof value === 'boolean') return value ? 'sim' : 'não'

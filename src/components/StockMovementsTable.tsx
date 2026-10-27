@@ -137,7 +137,27 @@ export function StockMovementsTable({
                         label=""
                         size="icon-sm"
                         icon={<Trash2 />}
+                        title="Excluir movimentação manual?"
                         confirmMessage="Excluir esta movimentação manual? O saldo do produto será recalculado."
+                        details={[
+                          {
+                            label: 'Produto',
+                            value: row.product?.name ?? 'Produto',
+                            hint: row.product?.sku ? `SKU ${row.product.sku}` : formatDate(row.movement_date),
+                            span: 2,
+                          },
+                          {
+                            label: 'Tipo / Quantidade',
+                            value: `${STOCK_MOVEMENT_META[row.type]?.label ?? row.type} (${signed > 0 ? '+' : ''}${formatNumber(signed)})`,
+                            tone: signed >= 0 ? 'positive' : 'negative',
+                          },
+                          {
+                            label: 'Impacto no saldo',
+                            value: 'Saldo recalculado imediatamente',
+                            hint: row.reason ?? row.notes ?? 'Movimentação manual removida',
+                            tone: 'warning',
+                          },
+                        ]}
                       />
                     )}
                   </TableCell>

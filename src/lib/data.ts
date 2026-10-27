@@ -3,6 +3,7 @@ import 'server-only'
 // Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
 // O alias mantem os call sites identicos -- o que muda e a garantia.
 import { createAuthedClient as createClient } from '@/lib/auth'
+import { enrichProducts, enrichProductStats } from '@/lib/product-catalog'
 import type { GlobalFilters } from '@/lib/filters'
 import type {
   Category,
@@ -101,13 +102,13 @@ export async function getPaymentMethods(): Promise<PaymentMethod[]> {
 export async function getProducts(): Promise<Product[]> {
   const supabase = await createClient()
   const result = await supabase.from('products').select('*').order('name')
-  return unwrap<Product>(result, 'produtos')
+  return enrichProducts(unwrap<Product>(result, 'produtos'))
 }
 
 export async function getProductStats(): Promise<ProductStats[]> {
   const supabase = await createClient()
   const result = await supabase.from('v_product_stats').select('*').order('name')
-  return unwrap<ProductStats>(result, 'produtos')
+  return enrichProductStats(unwrap<ProductStats>(result, 'produtos'))
 }
 
 export async function getSettings(): Promise<Settings | null> {
@@ -359,7 +360,9 @@ export async function getProductById(id: string): Promise<ProductStats | null> {
     .eq('product_id', id)
     .maybeSingle()
   if (error) throw new Error(`Falha ao carregar produto: ${error.message}`)
-  return data as ProductStats | null
+  if (!data) return null
+  const [enriched] = await enrichProductStats([data as ProductStats])
+  return enriched ?? null
 }
 
 export async function getSupplierById(id: string): Promise<SupplierStats | null> {

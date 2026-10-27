@@ -8,7 +8,7 @@ import { TransactionsTable } from '@/components/TransactionsTable'
 import { getReferenceData, getTransactions, subtreeIds } from '@/lib/data'
 import { summarizeTransactions } from '@/lib/finance'
 import { describePeriod, parseFilters, type SearchParams } from '@/lib/filters'
-import { formatCurrency } from '@/lib/format'
+import { formatCurrency, formatDate } from '@/lib/format'
 
 import { cancelTransaction, restoreTransaction } from './actions'
 import { TransactionForm } from './TransactionForm'
@@ -111,14 +111,55 @@ export default async function TransactionsPage({
                 action={restoreTransaction}
                 fields={{ id: row.id }}
                 label="Reativar"
+                title={`Reativar lançamento "${row.description}"?`}
                 confirmMessage={`Reativar "${row.description}" como PAGO?`}
+                details={[
+                  {
+                    label: 'Lançamento',
+                    value: row.description,
+                    hint: `${formatDate(row.transaction_date)} · ${row.type}`,
+                    span: 2,
+                  },
+                  {
+                    label: 'Valor',
+                    value: formatCurrency(row.amount),
+                    tone: 'accent',
+                  },
+                  {
+                    label: 'Novo status',
+                    value: 'PAGO',
+                    hint: 'Volta a compor caixa e resultado operacional',
+                    tone: 'positive',
+                  },
+                ]}
               />
             ) : (
               <ConfirmActionButton
                 action={cancelTransaction}
                 fields={{ id: row.id }}
                 label="Cancelar"
+                title={`Cancelar lançamento "${row.description}"?`}
                 confirmMessage={`Cancelar "${row.description}"? O lançamento fica no histórico, mas deixa de contar no caixa e no resultado.`}
+                details={[
+                  {
+                    label: 'Lançamento',
+                    value: row.description,
+                    hint: `${formatDate(row.transaction_date)} · ${row.type}`,
+                    span: 2,
+                  },
+                  {
+                    label: 'Valor',
+                    value: formatCurrency(row.amount),
+                    hint: row.cost_center_name ?? row.category_name ?? undefined,
+                    tone: 'warning',
+                  },
+                  {
+                    label: 'Auditoria & Caixa',
+                    value: 'Efeito financeiro zerado',
+                    hint: 'Mantém registro completo na trilha de auditoria.',
+                    tone: 'positive',
+                  },
+                ]}
               />
             )}
           </div>

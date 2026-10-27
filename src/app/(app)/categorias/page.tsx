@@ -91,11 +91,39 @@ export default async function CategoriesPage() {
                               label=""
                               size="icon-sm"
                               icon={category.active ? <EyeOff /> : <Eye />}
+                              title={
+                                category.active
+                                  ? `Desativar categoria "${category.name}"?`
+                                  : `Reativar categoria "${category.name}"?`
+                              }
                               confirmMessage={
                                 category.active
                                   ? `Desativar "${category.name}"? Ela some dos formulários, mas os lançamentos antigos continuam intactos.`
                                   : `Reativar "${category.name}"?`
                               }
+                              details={[
+                                {
+                                  label: 'Categoria',
+                                  value: category.name,
+                                  hint: `Tipo: ${TYPE_LABEL[category.type] ?? category.type}`,
+                                  tone: 'accent',
+                                },
+                                {
+                                  label: 'Novo status',
+                                  value: category.active ? 'Inativa' : 'Ativa',
+                                  hint: category.active
+                                    ? 'Oculta nos novos lançamentos'
+                                    : 'Disponível nos formulários',
+                                  tone: category.active ? 'warning' : 'positive',
+                                },
+                                {
+                                  label: 'Histórico financeiro',
+                                  value: 'Lançamentos preservados',
+                                  hint: 'Todos os lançamentos e relatórios anteriores permanecem intactos.',
+                                  tone: 'positive',
+                                  span: 2,
+                                },
+                              ]}
                             />
                           </div>
                         </TableCell>

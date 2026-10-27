@@ -23,7 +23,9 @@ import {
 } from '@/domain/auditor'
 import { loadIntegrationSettings } from '@/integrations/erp/settings'
 import { num, round2, todayISO } from '@/lib/format'
+import { parseCatalogSpec } from '@/lib/product-catalog'
 import { createAdminClient } from '@/lib/supabase/admin'
+import type { ProductCatalogSpec } from '@/lib/types'
 
 /**
  * EXECUCAO DO AUDITOR (secoes 27, 28 e 30)
@@ -92,7 +94,12 @@ type SupplierLinkRow = {
  * gateway_fee numa coluna `fees` unica, entao separar aqui seria inventar a
  * divisao. O total de custo percentual esta correto.
  */
-function deriveVariableCosts(rows: SalesRow[]): VariableCosts {
+function deriveVariableCosts(rows: SalesRow[], spec?: ProductCatalogSpec): VariableCosts {
+  const defaultShipping = num(spec?.shipping_cost)
+  const defaultPackaging = num(spec?.packaging_cost)
+  const defaultMktPct = num(spec?.marketplace_percent)
+  const defaultTaxPct = num(spec?.tax_percent)
+
   let gross = 0
   let fees = 0
   let tax = 0
@@ -101,15 +108,33 @@ function deriveVariableCosts(rows: SalesRow[]): VariableCosts {
   let units = 0
 
   for (const row of rows) {
-    gross += num(row.gross_revenue)
-    fees += num(row.fees)
-    tax += num(row.tax)
-    shipping += num(row.shipping_cost)
-    packaging += num(row.packaging)
-    units += num(row.quantity)
+    const qty = num(row.quantity)
+    const rowGross = num(row.gross_revenue)
+    const rowShipping = num(row.shipping_cost)
+    const rowPackaging = num(row.packaging)
+    const rowFees = num(row.fees)
+    const rowTax = num(row.tax)
+
+    gross += rowGross
+    fees += rowFees > 0 ? rowFees : rowGross * (defaultMktPct / 100)
+    tax += rowTax > 0 ? rowTax : rowGross * (defaultTaxPct / 100)
+    shipping += rowShipping > 0 ? rowShipping : qty * defaultShipping
+    packaging += rowPackaging > 0 ? rowPackaging : qty * defaultPackaging
+    units += qty
   }
 
-  if (gross <= 0 || units <= 0) return NO_VARIABLE_COSTS
+  if (gross <= 0 || units <= 0) {
+    if (defaultShipping > 0 || defaultPackaging > 0 || defaultMktPct > 0 || defaultTaxPct > 0) {
+      return {
+        marketplacePercent: round2(defaultMktPct),
+        gatewayPercent: 0,
+        taxPercent: round2(defaultTaxPct),
+        shippingPerUnit: round2(defaultShipping),
+        packagingPerUnit: round2(defaultPackaging),
+      }
+    }
+    return NO_VARIABLE_COSTS
+  }
 
   return {
     marketplacePercent: round2((fees / gross) * 100),
@@ -152,7 +177,7 @@ export async function buildProductSnapshots(
 ): Promise<SnapshotBuildResult> {
   const db = createAdminClient()
 
-  const [products, balances, sales, supplierLinks] = await Promise.all([
+  const [products, balances, sales, supplierLinks, productSnapshots] = await Promise.all([
     db
       .from('products')
       .select('id,sku,name,unit_cost,sale_price,active')
@@ -172,9 +197,15 @@ export async function buildProductSnapshots(
       .eq('organization_id', organizationId)
       .eq('resource_type', 'PRODUCT_SUPPLIER')
       .is('deleted_at', null),
+    db
+      .from('erp_snapshots')
+      .select('source,external_id,data')
+      .eq('organization_id', organizationId)
+      .eq('resource_type', 'PRODUCT')
+      .is('deleted_at', null),
   ])
 
-  for (const result of [products, balances, sales, supplierLinks]) {
+  for (const result of [products, balances, sales, supplierLinks, productSnapshots]) {
     if (result.error) throw new Error(`Falha ao montar a análise: ${result.error.message}`)
   }
 
@@ -220,8 +251,23 @@ export async function buildProductSnapshots(
     if (Number.isFinite(lead) && lead > 0) leadTimeByProduct.set(productId, lead)
   }
 
+  const catalogByProduct = new Map<string, ProductCatalogSpec>()
+  for (const row of (productSnapshots.data ?? []) as {
+    source: string
+    external_id: string
+    data: Record<string, unknown>
+  }[]) {
+    const extId = String(row.external_id ?? '')
+    if (!extId) continue
+    const parsed = parseCatalogSpec(row.data)
+    catalogByProduct.set(extId, { ...(catalogByProduct.get(extId) ?? {}), ...parsed })
+  }
+
   const snapshots: ProductSnapshot[] = productRows.map((product) => {
     const productSales = salesByProduct.get(product.id) ?? []
+    const spec =
+      catalogByProduct.get(product.id) ??
+      (product.sku ? catalogByProduct.get(product.sku.trim()) : undefined)
 
     const sales: SaleEvent[] = productSales.map((row) => ({
       date: row.order_date.slice(0, 10),
@@ -233,6 +279,7 @@ export async function buildProductSnapshots(
     // acusa cadastro incompleto em vez de calcular margem de 100%.
     const cost = num(product.unit_cost)
     const price = num(product.sale_price)
+    const weightGrams = spec?.gross_weight_grams ?? spec?.net_weight_grams ?? null
 
     return {
       productId: product.id,
@@ -246,16 +293,17 @@ export async function buildProductSnapshots(
       supplierRequired: productRequiresSupplier({
         hasStockRecord: (balancesByProduct.get(product.id) ?? []).length > 0,
       }),
-      supplierLink: resolveSupplierLink(supplierSource, suppliersByProduct.has(product.id)),
-      variableCosts: deriveVariableCosts(productSales),
+      supplierLink: resolveSupplierLink(
+        supplierSource,
+        suppliersByProduct.has(product.id) || Boolean(spec?.supplier_sku),
+      ),
+      variableCosts: deriveVariableCosts(productSales, spec),
       // Sem integracao de Ads nao existe gasto de midia. Null, nunca zero: zero
       // afirmaria "investimos nada", e a regra de oportunidade usa essa diferenca.
       ads: null,
       registry: {
-        // NCM, peso e dimensao virao do Bling. Enquanto nao vierem, `products` nao
-        // tem essas colunas -- a lacuna e real e o auditor deve apontar.
-        ncm: null,
-        weightKg: null,
+        ncm: spec?.ncm ?? null,
+        weightKg: weightGrams ? Number((weightGrams / 1000).toFixed(3)) : null,
         hasDimensions: false,
       },
     }

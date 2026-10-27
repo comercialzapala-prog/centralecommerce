@@ -1,5 +1,6 @@
 import { Eye, EyeOff } from 'lucide-react'
 
+import { BoxGrid } from '@/components/BoxGrid'
 import { ConfirmActionButton } from '@/components/FormDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { getChannels, getPaymentMethods, getSettings } from '@/lib/data'
@@ -65,33 +66,44 @@ export default async function SettingsPage() {
         />
       </div>
 
-      <section className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
-        <h2 className="mb-2 text-sm font-semibold text-foreground">
+      <section className="space-y-3 rounded-xl border bg-card p-4">
+        <h2 className="text-sm font-semibold text-foreground">
           Como o sistema separa os conceitos
         </h2>
-        <ul className="space-y-1.5">
-          <li>
-            <strong className="text-foreground">Categoria</strong> — o que é esse gasto (Frete,
-            Embalagem, Energia).
-          </li>
-          <li>
-            <strong className="text-foreground">Centro de custo</strong> — qual área consumiu o
-            recurso (Operação Logística &gt; Expedição &gt; Sacolas).
-          </li>
-          <li>
-            <strong className="text-foreground">Fornecedor</strong> — para quem o dinheiro foi
-            pago (Jadlog, Meta, Correios).
-          </li>
-          <li>
-            <strong className="text-foreground">Canal</strong> — onde a venda aconteceu (Site,
-            Shopee, Mercado Livre).
-          </li>
-        </ul>
-        <p className="mt-3 border-t pt-3">
-          Aporte entra no caixa mas não é receita nem resultado. Investimento não é despesa do
-          mês: ele forma o total a recuperar no indicador 0/50, onde 50 é a escala do progresso,
-          nunca um valor em reais.
-        </p>
+        <BoxGrid
+          columns={2}
+          items={[
+            {
+              label: 'Categoria',
+              value: 'O que é esse gasto',
+              hint: 'Ex.: Frete, Embalagem, Energia, Imposto',
+              tone: 'accent',
+            },
+            {
+              label: 'Centro de custo',
+              value: 'Qual área consumiu o recurso',
+              hint: 'Ex.: Operação Logística > Expedição > Sacolas',
+              tone: 'accent',
+            },
+            {
+              label: 'Fornecedor',
+              value: 'Para quem o dinheiro foi pago',
+              hint: 'Ex.: Jadlog, Meta, Correios, Petrus',
+            },
+            {
+              label: 'Canal',
+              value: 'Onde a venda aconteceu',
+              hint: 'Ex.: Site, Shopee, Mercado Livre, Amazon',
+            },
+            {
+              label: 'Aporte vs. Investimento (Indicador 0/50)',
+              value: 'Aporte entra no caixa; Investimento forma o total a recuperar',
+              hint: 'No indicador 0/50, 50 é sempre a escala visual do progresso de break-even, nunca um valor em reais.',
+              tone: 'positive',
+              span: 2,
+            },
+          ]}
+        />
       </section>
     </>
   )
@@ -146,11 +158,31 @@ function ListCard({
                 label=""
                 size="icon-sm"
                 icon={item.active ? <EyeOff /> : <Eye />}
+                title={item.active ? `Desativar "${item.name}"?` : `Reativar "${item.name}"?`}
                 confirmMessage={
                   item.active
                     ? `Desativar "${item.name}"? O histórico é preservado.`
                     : `Reativar "${item.name}"?`
                 }
+                details={[
+                  {
+                    label: title,
+                    value: item.name,
+                    tone: 'accent',
+                  },
+                  {
+                    label: 'Status após confirmação',
+                    value: item.active ? 'Inativo' : 'Ativo',
+                    tone: item.active ? 'warning' : 'positive',
+                  },
+                  {
+                    label: 'Histórico operacional',
+                    value: 'Vendas e lançamentos antigos preservados',
+                    hint: 'Apenas novos cadastros deixam de exibir este item quando inativo.',
+                    tone: 'positive',
+                    span: 2,
+                  },
+                ]}
               />
             </li>
           ))}

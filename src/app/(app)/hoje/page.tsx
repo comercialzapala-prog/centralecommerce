@@ -13,6 +13,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 
+import { BoxGrid } from '@/components/BoxGrid'
 import { AlertCard } from '@/components/hoje/AlertCard'
 import { HojeFilterBar } from '@/components/hoje/HojeFilterBar'
 import { HojeToolbar } from '@/components/hoje/HojeToolbar'
@@ -51,24 +52,6 @@ import { markReviewed, openAlert, runAnalysis, setAlertStatus } from './actions'
 
 /**
  * /hoje -- A CENTRAL OPERACIONAL DIARIA (secao 30)
- *
- * A pergunta que a pagina responde e "o que exige atencao agora", nao "como vai a
- * operacao". A diferenca decide o layout: um dashboard mostra tudo o que existe;
- * esta tela mostra o que esta ERRADO, ordenado por gravidade, e fica quase vazia
- * quando esta tudo bem -- e ficar vazia e o resultado desejado, nao uma falha.
- *
- * DE ONDE VEM CADA NUMERO:
- *   - alertas, severidade, impacto e prioridade -> `alerts`, gravado pelo auditor;
- *   - receita, margem e pedidos de hoje         -> `finance.ts` sobre v_order_result;
- *   - compromissos pendentes                     -> `finance.ts` sobre v_transaction_full;
- *   - fila e conexao                             -> v_hoje_summary / auditor_runs.
- *
- * NADA e calculado nesta pagina. Zero regra de negocio aqui: se um numero parece
- * errado, o defeito esta no dominio ou na view, e e la que se corrige -- nunca em
- * dois lugares.
- *
- * A ANALISE NAO RODA NO RENDER. Server Component nao deve ter efeito colateral; a
- * execucao e um botao na barra de acoes.
  */
 
 export const metadata: Metadata = {
@@ -88,12 +71,9 @@ export default async function HojePage({
   const params = await searchParams
   const filters = parseHojeFilters(params)
 
-  // O corte de periodo e calculado UMA vez, aqui, e passado adiante. Chamar
-  // `new Date()` dentro de funcao pura tornaria o resultado irreproduzivel.
   const now = new Date()
   const since = periodCutoff(filters.period, now)
 
-  // Filtro do dia para os numeros financeiros, no formato que finance.ts espera.
   const todayFilters = {
     ...EMPTY_FILTERS,
     period: 'hoje' as const,
@@ -121,8 +101,6 @@ export default async function HojePage({
       channel: filters.channel,
       since,
     }),
-    // Sem os filtros da tela de propósito: os vistos servem para descontar os
-    // KPIs, e um desconto parcial faria o KPI mentir na direção contrária.
     getAlerts(organizationId, { statuses: SEEN_STATUSES }),
     getResolvedAlerts(organizationId, 8),
     getOpenRecommendations(organizationId, 12),
@@ -134,7 +112,6 @@ export default async function HojePage({
     getTransactions({ ...EMPTY_FILTERS, status: 'PENDENTE' }),
   ])
 
-  // Ordenacao final pelos cinco critérios do auditor (ver prioritize()).
   const alerts = prioritizeAlerts(rawAlerts)
   const blocks = buildHojeBlocks(alerts)
   const priorities = alerts.slice(0, 5)
@@ -144,8 +121,6 @@ export default async function HojePage({
 
   const review = splitSinceLastReview(alerts, resolvedAlerts, lastReviewedAt)
 
-  // A view conta OPEN + ACKNOWLEDGED; a lista mostra so OPEN. Sem este desconto
-  // o KPI "3 criticos" levaria a uma tela vazia. Ver discountSeen().
   const kpis = discountSeen(
     {
       critical: num(summary?.critical_open),
@@ -180,10 +155,22 @@ export default async function HojePage({
       />
 
       {lastRun?.status === 'FAILED' ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
-          <p className="text-sm font-medium text-destructive">A última análise falhou</p>
-          <p className="mt-1 text-sm text-muted-foreground">{lastRun.error}</p>
-        </div>
+        <BoxGrid
+          columns={2}
+          items={[
+            {
+              label: 'Status da última execução',
+              value: 'A última análise falhou',
+              hint: formatDateTime(lastRun.started_at),
+              tone: 'negative',
+            },
+            {
+              label: 'Detalhe técnico',
+              value: lastRun.error ?? 'Erro não especificado durante a execução do auditor.',
+              tone: 'warning',
+            },
+          ]}
+        />
       ) : null}
 
       {/* ----------------- KPIs: poucos e uteis (secao 30) ----------------- */}
@@ -250,23 +237,35 @@ export default async function HojePage({
 
       {/* ----------------- Desde a ultima revisao ----------------- */}
       {!neverRan && !review.isFirstReview && (review.newAlerts.length > 0 || review.resolvedSince.length > 0) ? (
-        <section className="rounded-xl border bg-card p-4">
-          <div className="mb-1 flex items-center gap-2">
+        <section className="space-y-2.5 rounded-xl border bg-card p-4">
+          <div className="flex items-center gap-2">
             <Clock size={15} className="text-muted-foreground" />
             <h2 className="text-sm font-semibold">Desde a sua última revisão</h2>
             <span className="text-xs text-muted-foreground">
               {formatDateTime(lastReviewedAt)}
             </span>
           </div>
-          <p className="text-sm text-muted-foreground">
-            {review.newAlerts.length > 0
-              ? `${formatNumber(review.newAlerts.length)} alerta(s) novo(s)`
-              : 'Nenhum alerta novo'}
-            {' · '}
-            {review.resolvedSince.length > 0
-              ? `${formatNumber(review.resolvedSince.length)} resolvido(s)`
-              : 'nenhum resolvido'}
-          </p>
+          <BoxGrid
+            columns={2}
+            items={[
+              {
+                label: 'Novos alertas',
+                value:
+                  review.newAlerts.length > 0
+                    ? `${formatNumber(review.newAlerts.length)} alerta(s) novo(s)`
+                    : 'Nenhum alerta novo',
+                tone: review.newAlerts.length > 0 ? 'warning' : 'positive',
+              },
+              {
+                label: 'Resolvidos desde então',
+                value:
+                  review.resolvedSince.length > 0
+                    ? `${formatNumber(review.resolvedSince.length)} resolvido(s)`
+                    : 'Nenhum resolvido',
+                tone: review.resolvedSince.length > 0 ? 'positive' : 'neutral',
+              },
+            ]}
+          />
         </section>
       ) : null}
 
@@ -391,25 +390,35 @@ export default async function HojePage({
           </div>
           <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
             {recommendations.map((item) => (
-              <article key={item.id} className="rounded-lg border bg-card p-3.5">
-                <div className="mb-1 flex items-center gap-2">
+              <article key={item.id} className="space-y-2.5 rounded-xl border bg-card p-4">
+                <div className="flex items-center gap-2">
                   <Sparkles size={14} className="shrink-0 text-sky-600 dark:text-sky-400" />
                   <Badge variant="secondary">{item.kind}</Badge>
+                  <h3 className="text-sm font-medium leading-snug">{item.title}</h3>
                 </div>
-                <h3 className="text-sm font-medium leading-snug">{item.title}</h3>
-                <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
-                {item.current_value !== null && item.proposed_value !== null ? (
-                  <p className="mt-2 text-xs tabular-nums">
-                    <span className="text-muted-foreground">de </span>
-                    {formatNumber(item.current_value)}
-                    <span className="text-muted-foreground"> para </span>
-                    <span className="font-semibold">{formatNumber(item.proposed_value)}</span>
-                  </p>
-                ) : null}
+                <BoxGrid
+                  columns={2}
+                  items={[
+                    {
+                      label: 'Motivo da recomendação',
+                      value: item.reason,
+                      span: item.current_value !== null && item.proposed_value !== null ? 1 : 2,
+                    },
+                    ...(item.current_value !== null && item.proposed_value !== null
+                      ? [
+                          {
+                            label: 'Ajuste sugerido',
+                            value: `${formatNumber(item.current_value)} → ${formatNumber(item.proposed_value)}`,
+                            tone: 'accent' as const,
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
                 {item.product_id ? (
                   <Link
                     href={`/produtos/${item.product_id}`}
-                    className="mt-2 inline-block text-xs font-medium text-primary hover:underline"
+                    className="inline-block text-xs font-medium text-primary hover:underline"
                   >
                     Ver produto
                   </Link>
@@ -424,30 +433,30 @@ export default async function HojePage({
       {outcomes.length > 0 ? (
         <section className="space-y-2.5">
           <h2 className="text-sm font-semibold">A recomendação foi boa?</h2>
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
             {outcomes.map((outcome) => (
-              <div key={outcome.id} className="rounded-lg border bg-card p-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <Badge variant={outcome.verdict === 'POSITIVE' ? 'default' : 'outline'}>
-                    {outcome.verdict ?? 'SEM VEREDITO'}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    medido {formatDateTime(outcome.measured_at)} · janela de {outcome.window_days} dias
-                  </span>
-                </div>
-                {outcome.notes ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{outcome.notes}</p>
-                ) : null}
-              </div>
+              <BoxGrid
+                key={outcome.id}
+                columns={2}
+                items={[
+                  {
+                    label: 'Veredito',
+                    value: outcome.verdict ?? 'SEM VEREDITO',
+                    hint: `Medido ${formatDateTime(outcome.measured_at)} · janela de ${outcome.window_days} dias`,
+                    tone: outcome.verdict === 'POSITIVE' ? 'positive' : 'neutral',
+                  },
+                  {
+                    label: 'Observações',
+                    value: outcome.notes ?? 'Sem observações adicionais',
+                  },
+                ]}
+              />
             ))}
           </div>
         </section>
       ) : null}
 
-      {/* ----------------- Ja vistos -----------------
-          Recolhida: o que voce ja leu nao pode ocupar o mesmo espaco do que e
-          novo, mas tambem nao pode sumir sem deixar rastro. Fechada por padrao,
-          com a contagem a vista. */}
+      {/* ----------------- Ja vistos ----------------- */}
       {!filters.status && seenAlerts.length > 0 ? (
         <details className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer text-sm font-semibold">

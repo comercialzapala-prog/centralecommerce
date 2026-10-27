@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { Ban, CheckCircle2, Trash2 } from 'lucide-react'
 
+import { BoxGrid } from '@/components/BoxGrid'
 import { ConfirmActionButton } from '@/components/FormDialog'
 import { PageHeader } from '@/components/PageHeader'
 import {
@@ -87,7 +88,29 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 label="Reativar pedido"
                 variant="outline"
                 icon={<CheckCircle2 />}
+                title={`Reativar pedido ${order.order_number}?`}
                 confirmMessage="Reativar este pedido? Ele volta a contar em faturamento, resultado e estoque."
+                details={[
+                  {
+                    label: 'Pedido',
+                    value: order.order_number,
+                    hint: [formatDate(order.order_date), order.channel_name].filter(Boolean).join(' · '),
+                    tone: 'accent',
+                  },
+                  {
+                    label: 'Valor / Resultado',
+                    value: formatCurrency(total),
+                    hint: `Resultado líquido: ${formatCurrency(result)}`,
+                    tone: result >= 0 ? 'positive' : 'negative',
+                  },
+                  {
+                    label: 'Impacto na operação',
+                    value: 'Volta para Faturamento, Resultado e Estoque',
+                    hint: `Dá baixa novamente nos ${formatNumber(items.length)} item(ns) vinculados ao pedido.`,
+                    tone: 'positive',
+                    span: 2,
+                  },
+                ]}
               />
             ) : (
               <ConfirmActionButton
@@ -96,7 +119,28 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 label="Cancelar pedido"
                 variant="outline"
                 icon={<Ban />}
+                title={`Cancelar pedido ${order.order_number}?`}
                 confirmMessage="Cancelar este pedido? Ele sai do faturamento, do resultado e devolve os itens ao estoque, mas continua no histórico."
+                details={[
+                  {
+                    label: 'Pedido',
+                    value: order.order_number,
+                    hint: [formatDate(order.order_date), order.channel_name].filter(Boolean).join(' · '),
+                    tone: 'warning',
+                  },
+                  {
+                    label: 'Valor / Resultado',
+                    value: formatCurrency(total),
+                    hint: `Resultado líquido: ${formatCurrency(result)}`,
+                  },
+                  {
+                    label: 'Impacto na operação',
+                    value: 'Devolve itens ao estoque e zera efeito financeiro',
+                    hint: 'O pedido permanece visível no histórico como CANCELADO.',
+                    tone: 'positive',
+                    span: 2,
+                  },
+                ]}
               />
             )}
           </>
@@ -104,9 +148,28 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       />
 
       {cancelled ? (
-        <p className="rounded-xl border border-amber-500/40 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-          Pedido cancelado — não entra em faturamento, resultado nem estoque.
-        </p>
+        <BoxGrid
+          columns={3}
+          items={[
+            {
+              label: 'Status do pedido',
+              value: 'CANCELADO',
+              hint: `Pedido ${order.order_number} preservado apenas para histórico`,
+              tone: 'warning',
+            },
+            {
+              label: 'Efeito financeiro',
+              value: 'Não contabilizado',
+              hint: 'Fora de faturamento e resultado operacional',
+            },
+            {
+              label: 'Efeito no estoque',
+              value: 'Baixa revertida',
+              hint: 'Unidades devolvidas ao saldo disponível',
+              tone: 'positive',
+            },
+          ]}
+        />
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -185,7 +248,28 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                             label=""
                             size="icon-sm"
                             icon={<Trash2 />}
+                            title="Remover item do pedido?"
                             confirmMessage="Remover este item? A baixa de estoque correspondente também é desfeita."
+                            details={[
+                              {
+                                label: 'Produto',
+                                value: item.product?.name ?? 'Item do pedido',
+                                hint: item.product?.sku ? `SKU ${item.product.sku}` : undefined,
+                                span: 2,
+                              },
+                              {
+                                label: 'Quantidade',
+                                value: `${formatNumber(item.quantity)} un.`,
+                                hint: 'Devolvida ao saldo de estoque',
+                                tone: 'positive',
+                              },
+                              {
+                                label: 'Total do item',
+                                value: formatCurrency(item.gross_total),
+                                hint: `Custo CMV: ${formatCurrency(item.cost_total)}`,
+                                tone: 'warning',
+                              },
+                            ]}
                           />
                         </TableCell>
                       </TableRow>

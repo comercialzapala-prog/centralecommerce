@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
-import { resultTone } from '@/lib/finance'
+import { calculateOrderProductCosts, resultTone } from '@/lib/finance'
 import { formatCurrency, num, parseAmount, round2, todayISO } from '@/lib/format'
 import { ORDER_STATUSES, type Channel, type OrderRow, type Product } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -89,17 +89,65 @@ export function OrderForm({
       ]),
     ),
   )
+  const [manualCostOverrides, setManualCostOverrides] = React.useState<Record<string, boolean>>({})
   const [discount, setDiscount] = React.useState(order ? String(order.discount_amount) : '')
   const [shipping, setShipping] = React.useState(order ? String(order.shipping_charged) : '')
 
+  const applyAutoProductCosts = React.useCallback(
+    (nextItems: ItemDraft[], overrides: Record<string, boolean>) => {
+      if (editing) return
+      const auto = calculateOrderProductCosts(
+        nextItems
+          .filter((item) => item.product_id)
+          .map((item) => {
+            const prod = products.find((p) => p.id === item.product_id)
+            return {
+              quantity: Number(item.quantity) || 0,
+              unitPrice: parseAmount(item.unit_price) ?? num(prod?.sale_price),
+              shippingPerUnit: num(prod?.shipping_cost),
+              packagingPerUnit: num(prod?.packaging_cost),
+              marketplacePercent: num(prod?.marketplace_percent),
+              taxPercent: num(prod?.tax_percent),
+            }
+          }),
+      )
+
+      setCosts((current) => ({
+        ...current,
+        shipping_cost: overrides.shipping_cost
+          ? current.shipping_cost
+          : auto.shippingCost > 0
+            ? String(auto.shippingCost)
+            : '',
+        packaging_cost: overrides.packaging_cost
+          ? current.packaging_cost
+          : auto.packagingCost > 0
+            ? String(auto.packagingCost)
+            : '',
+        marketplace_fee: overrides.marketplace_fee
+          ? current.marketplace_fee
+          : auto.marketplaceFee > 0
+            ? String(auto.marketplaceFee)
+            : '',
+        tax_amount: overrides.tax_amount
+          ? current.tax_amount
+          : auto.taxAmount > 0
+            ? String(auto.taxAmount)
+            : '',
+      }))
+    },
+    [editing, products],
+  )
+
   const updateItem = (key: string, patch: Partial<ItemDraft>) => {
-    setItems((current) =>
-      current.map((item) => (item.key === key ? { ...item, ...patch } : item)),
-    )
+    setItems((current) => {
+      const next = current.map((item) => (item.key === key ? { ...item, ...patch } : item))
+      applyAutoProductCosts(next, manualCostOverrides)
+      return next
+    })
   }
 
-  // Trocar o produto puxa custo e preco do cadastro, mas o usuario pode
-  // sobrescrever -- o CMV congelado no item e o que vale para o resultado.
+  // Trocar o produto puxa custo, preco e soma o frete/taxas unitarias do cadastro.
   const pickProduct = (key: string, productId: string) => {
     const product = products.find((item) => item.id === productId)
     updateItem(key, {
@@ -108,6 +156,26 @@ export function OrderForm({
       unit_cost: product ? String(num(product.unit_cost)) : '',
     })
   }
+
+  const autoCosts = React.useMemo(
+    () =>
+      calculateOrderProductCosts(
+        items
+          .filter((item) => item.product_id)
+          .map((item) => {
+            const prod = products.find((p) => p.id === item.product_id)
+            return {
+              quantity: Number(item.quantity) || 0,
+              unitPrice: parseAmount(item.unit_price) ?? num(prod?.sale_price),
+              shippingPerUnit: num(prod?.shipping_cost),
+              packagingPerUnit: num(prod?.packaging_cost),
+              marketplacePercent: num(prod?.marketplace_percent),
+              taxPercent: num(prod?.tax_percent),
+            }
+          }),
+      ),
+    [items, products],
+  )
 
   const itemsGross = items.reduce(
     (sum, item) => sum + (Number(item.quantity) || 0) * (parseAmount(item.unit_price) ?? 0),
@@ -221,79 +289,111 @@ export function OrderForm({
               type="button"
               variant="outline"
               size="xs"
-              onClick={() => setItems((current) => [...current, emptyItem()])}
+              onClick={() =>
+                setItems((current) => {
+                  const next = [...current, emptyItem()]
+                  applyAutoProductCosts(next, manualCostOverrides)
+                  return next
+                })
+              }
             >
               <Plus /> Adicionar item
             </Button>
           </div>
 
-          {items.map((item) => (
-            <div key={item.key} className="grid grid-cols-12 items-end gap-2">
-              <div className="col-span-12 sm:col-span-5">
-                <span className="text-[11px] text-muted-foreground">Produto</span>
-                <NativeSelect
-                  value={item.product_id}
-                  onChange={(event) => pickProduct(item.key, event.target.value)}
-                >
-                  <option value="">Selecione...</option>
-                  {products
-                    .filter((product) => product.active || product.id === item.product_id)
-                    .map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.sku ? `${product.sku} — ${product.name}` : product.name}
-                      </option>
-                    ))}
-                </NativeSelect>
-              </div>
+          {items.map((item) => {
+            const selectedProd = products.find((p) => p.id === item.product_id)
+            const unitShip = num(selectedProd?.shipping_cost)
+            const qtyNum = Number(item.quantity) || 0
 
-              <div className="col-span-3 sm:col-span-2">
-                <span className="text-[11px] text-muted-foreground">Qtd.</span>
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={item.quantity}
-                  onChange={(event) => updateItem(item.key, { quantity: event.target.value })}
-                  className="tabular-nums"
-                />
-              </div>
+            return (
+              <div key={item.key} className="space-y-1">
+                <div className="grid grid-cols-12 items-end gap-2">
+                  <div className="col-span-12 sm:col-span-5">
+                    <span className="text-[11px] text-muted-foreground">Produto</span>
+                    <NativeSelect
+                      value={item.product_id}
+                      onChange={(event) => pickProduct(item.key, event.target.value)}
+                    >
+                      <option value="">Selecione...</option>
+                      {products
+                        .filter((product) => product.active || product.id === item.product_id)
+                        .map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.sku ? `${product.sku} — ${product.name}` : product.name}
+                          </option>
+                        ))}
+                    </NativeSelect>
+                  </div>
 
-              <div className="col-span-4 sm:col-span-2">
-                <span className="text-[11px] text-muted-foreground">Preço</span>
-                <Input
-                  inputMode="decimal"
-                  value={item.unit_price}
-                  onChange={(event) => updateItem(item.key, { unit_price: event.target.value })}
-                  className="tabular-nums"
-                />
-              </div>
+                  <div className="col-span-3 sm:col-span-2">
+                    <span className="text-[11px] text-muted-foreground">Qtd.</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={item.quantity}
+                      onChange={(event) => updateItem(item.key, { quantity: event.target.value })}
+                      className="tabular-nums"
+                    />
+                  </div>
 
-              <div className="col-span-4 sm:col-span-2">
-                <span className="text-[11px] text-muted-foreground">Custo</span>
-                <Input
-                  inputMode="decimal"
-                  value={item.unit_cost}
-                  onChange={(event) => updateItem(item.key, { unit_cost: event.target.value })}
-                  className="tabular-nums"
-                />
-              </div>
+                  <div className="col-span-4 sm:col-span-2">
+                    <span className="text-[11px] text-muted-foreground">Preço</span>
+                    <Input
+                      inputMode="decimal"
+                      value={item.unit_price}
+                      onChange={(event) => updateItem(item.key, { unit_price: event.target.value })}
+                      className="tabular-nums"
+                    />
+                  </div>
 
-              <div className="col-span-1 flex justify-end">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Remover item"
-                  disabled={items.length === 1}
-                  onClick={() =>
-                    setItems((current) => current.filter((entry) => entry.key !== item.key))
-                  }
-                >
-                  <Trash2 />
-                </Button>
+                  <div className="col-span-4 sm:col-span-2">
+                    <span className="text-[11px] text-muted-foreground">Custo</span>
+                    <Input
+                      inputMode="decimal"
+                      value={item.unit_cost}
+                      onChange={(event) => updateItem(item.key, { unit_cost: event.target.value })}
+                      className="tabular-nums"
+                    />
+                  </div>
+
+                  <div className="col-span-1 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Remover item"
+                      disabled={items.length === 1}
+                      onClick={() =>
+                        setItems((current) => {
+                          const next = current.filter((entry) => entry.key !== item.key)
+                          applyAutoProductCosts(next, manualCostOverrides)
+                          return next
+                        })
+                      }
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+                {selectedProd ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {[
+                      selectedProd.gross_weight_grams
+                        ? `Peso c/ emb.: ${selectedProd.gross_weight_grams}g`
+                        : null,
+                      unitShip > 0
+                        ? `Frete do item: ${formatCurrency(unitShip)} × ${qtyNum} = ${formatCurrency(unitShip * qtyNum)}`
+                        : 'Frete unitário: R$ 0,00',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                ) : null}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </section>
       ) : (
         <p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
@@ -323,7 +423,14 @@ export function OrderForm({
       </div>
 
       <section className="space-y-2 rounded-lg border p-3">
-        <h3 className="text-sm font-medium">Custos da venda</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Custos da venda</h3>
+          {!editing && autoCosts.shippingCost > 0 ? (
+            <span className="text-xs text-amber-400">
+              Soma de frete dos produtos: {formatCurrency(autoCosts.shippingCost)}
+            </span>
+          ) : null}
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {EXTRA_COST_FIELDS.map((field) => (
             <Field key={field.name} label={field.label} htmlFor={`ord-${field.name}`}>
@@ -331,9 +438,10 @@ export function OrderForm({
                 id={`ord-${field.name}`}
                 name={field.name}
                 value={costs[field.name] ?? ''}
-                onChange={(value) =>
+                onChange={(value) => {
+                  setManualCostOverrides((prev) => ({ ...prev, [field.name]: true }))
                   setCosts((current) => ({ ...current, [field.name]: value }))
-                }
+                }}
               />
             </Field>
           ))}

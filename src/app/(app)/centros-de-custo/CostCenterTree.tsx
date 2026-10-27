@@ -181,11 +181,36 @@ function TreeRow({
               label=""
               icon={node.active ? <EyeOff /> : <Eye />}
               size="icon-sm"
+              title={
+                node.active
+                  ? `Desativar centro "${node.cost_center_name}"?`
+                  : `Reativar centro "${node.cost_center_name}"?`
+              }
               confirmMessage={
                 node.active
                   ? `Desativar "${node.cost_center_name}" e todos os subcentros? O histórico é preservado.`
                   : `Reativar "${node.cost_center_name}"?`
               }
+              details={[
+                {
+                  label: 'Centro de custo',
+                  value: node.cost_center_name,
+                  hint: node.path,
+                  tone: 'accent',
+                  span: 2,
+                },
+                {
+                  label: 'Total acumulado (rollup)',
+                  value: formatCurrency(rollup),
+                  hint: hasChildren ? `${node.children.length} subcentro(s) direto(s)` : 'Centro folha',
+                },
+                {
+                  label: 'Histórico & Subcentros',
+                  value: node.active ? 'Inativa árvore sem apagar histórico' : 'Reativa centro de custo',
+                  hint: 'Lançamentos anteriores continuam somados nos relatórios.',
+                  tone: node.active ? 'warning' : 'positive',
+                },
+              ]}
             />
           </div>
         </div>
@@ -305,7 +330,7 @@ function ParentSelect({ rows, defaultValue }: { rows: Row[]; defaultValue: strin
         .filter((row) => row.active)
         .map((row) => (
           <option key={row.cost_center_id} value={row.cost_center_id}>
-            {`${'  '.repeat(Math.max(row.depth - 1, 0))}${row.depth > 1 ? '└ ' : ''}${row.cost_center_name}`}
+            {`${'  '.repeat(Math.max(row.depth - 1, 0))}${row.depth > 1 ? '└ ' : ''}${row.cost_center_name}`}
           </option>
         ))}
     </NativeSelect>

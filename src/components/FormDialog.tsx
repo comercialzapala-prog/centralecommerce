@@ -1,8 +1,10 @@
 'use client'
 
 import * as React from 'react'
+import { CheckCircle2, Loader2, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { BoxGrid, type BoxGridItem } from '@/components/BoxGrid'
 import { SubmitButton } from '@/components/FormControls'
 import { Button } from '@/components/ui/button'
 import {
@@ -108,15 +110,93 @@ export function FormDialog({
   )
 }
 
+function inferDefaultBoxGrid(
+  confirmMessage: string,
+  fields: Record<string, string>,
+): {
+  title: string
+  confirmLabel: string
+  tone: 'warning' | 'danger' | 'positive'
+  items: BoxGridItem[]
+} {
+  const lower = confirmMessage.toLowerCase()
+  const isReactivate = lower.startsWith('reativar') || fields.active === 'true'
+  const isDelete = lower.startsWith('excluir') || lower.startsWith('remover')
+  const isCancel = lower.startsWith('cancelar') || fields.status === 'CANCELADO'
+
+  const quotedMatch =
+    confirmMessage.match(/"([^"]+)"/) ??
+    confirmMessage.match(/^(?:Desativar|Reativar|Cancelar|Excluir|Remover)\s+([^?]+)\?/i)
+  const targetLabel = quotedMatch?.[1]?.trim() ?? 'Registro selecionado'
+
+  if (isReactivate) {
+    return {
+      title: 'Confirmar reativação',
+      confirmLabel: 'Reativar agora',
+      tone: 'positive',
+      items: [
+        { label: 'Operação', value: 'Reativar registro', tone: 'positive' },
+        { label: 'Novo status', value: 'Ativo / Concluído', tone: 'positive' },
+        { label: 'Item selecionado', value: targetLabel, span: 2 },
+      ],
+    }
+  }
+
+  if (isDelete) {
+    return {
+      title: 'Confirmar remoção',
+      confirmLabel: 'Confirmar remoção',
+      tone: 'danger',
+      items: [
+        { label: 'Operação', value: 'Remover item', tone: 'danger' },
+        { label: 'Impacto no saldo', value: 'Recalculado automaticamente', tone: 'warning' },
+        { label: 'Item selecionado', value: targetLabel, span: 2 },
+      ],
+    }
+  }
+
+  if (isCancel) {
+    return {
+      title: 'Confirmar cancelamento',
+      confirmLabel: 'Confirmar cancelamento',
+      tone: 'danger',
+      items: [
+        { label: 'Operação', value: 'Cancelar registro', tone: 'danger' },
+        { label: 'Novo status', value: 'CANCELADO', tone: 'warning' },
+        { label: 'Item selecionado', value: targetLabel, span: 2 },
+        { label: 'Efeito financeiro', value: 'Zerado no caixa/resultado', tone: 'neutral' },
+        { label: 'Auditoria', value: 'Mantido no histórico', tone: 'positive' },
+      ],
+    }
+  }
+
+  return {
+    title: 'Confirmar desativação',
+    confirmLabel: 'Desativar registro',
+    tone: 'warning',
+    items: [
+      { label: 'Operação', value: 'Inativar cadastro', tone: 'warning' },
+      { label: 'Novo status', value: 'Inativo', tone: 'neutral' },
+      { label: 'Item selecionado', value: targetLabel, span: 2 },
+      { label: 'Novos lançamentos', value: 'Oculto nos formulários', tone: 'neutral' },
+      { label: 'Histórico anterior', value: '100% preservado', tone: 'positive' },
+    ],
+  }
+}
+
 /**
- * Botao de acao destrutiva-leve (desativar/cancelar). Nunca apaga de verdade:
- * o sistema trabalha com active=false e status=CANCELADO (secao 41).
+ * Botao de acao com modal moderno em BoxGrid (substitui qualquer window.confirm / alert nativo).
+ * O sistema trabalha com active=false e status=CANCELADO (secao 41).
  */
 export function ConfirmActionButton({
   action,
   fields,
   label,
   confirmMessage,
+  title,
+  confirmLabel,
+  tone,
+  details,
   variant = 'ghost',
   size = 'sm',
   icon,
@@ -125,25 +205,117 @@ export function ConfirmActionButton({
   fields: Record<string, string>
   label: string
   confirmMessage: string
+  title?: string
+  confirmLabel?: string
+  tone?: 'warning' | 'danger' | 'positive'
+  details?: BoxGridItem[]
   variant?: React.ComponentProps<typeof Button>['variant']
   size?: React.ComponentProps<typeof Button>['size']
   icon?: React.ReactNode
 }) {
+  const [open, setOpen] = React.useState(false)
+  const [pending, startTransition] = React.useTransition()
+
+  const inferred = inferDefaultBoxGrid(confirmMessage, fields)
+  const resolvedTitle = title ?? inferred.title
+  const resolvedConfirmLabel = confirmLabel ?? inferred.confirmLabel
+  const resolvedTone = tone ?? inferred.tone
+  const boxItems = details && details.length > 0 ? details : inferred.items
+
+  const HeaderIcon =
+    resolvedTone === 'positive'
+      ? CheckCircle2
+      : resolvedTone === 'danger'
+        ? ShieldAlert
+        : TriangleAlert
+
+  const iconToneClass =
+    resolvedTone === 'positive'
+      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+      : resolvedTone === 'danger'
+        ? 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400'
+        : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+
+  const handleConfirm = () => {
+    const formData = new FormData()
+    for (const [key, value] of Object.entries(fields)) {
+      formData.set(key, value)
+    }
+
+    startTransition(async () => {
+      try {
+        await action(formData)
+        setOpen(false)
+        toast.success('Operação realizada com sucesso.')
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : 'Não foi possível concluir a operação.',
+        )
+      }
+    })
+  }
+
   return (
-    <form
-      action={action}
-      onSubmit={(event) => {
-        if (!window.confirm(confirmMessage)) event.preventDefault()
-      }}
-      className="inline"
-    >
-      {Object.entries(fields).map(([key, value]) => (
-        <input key={key} type="hidden" name={key} value={value} />
-      ))}
-      <Button type="submit" variant={variant} size={size}>
+    <>
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        onClick={() => setOpen(true)}
+        title={resolvedTitle}
+      >
         {icon}
         {label}
       </Button>
-    </form>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-start gap-3">
+              <div
+                className={cn(
+                  'flex size-10 shrink-0 items-center justify-center rounded-xl border',
+                  iconToneClass,
+                )}
+              >
+                <HeaderIcon className="size-5" />
+              </div>
+              <div className="space-y-1 text-left">
+                <DialogTitle>{resolvedTitle}</DialogTitle>
+                <DialogDescription>{confirmMessage}</DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <BoxGrid items={boxItems} columns={2} className="my-1" />
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => setOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant={resolvedTone === 'danger' ? 'destructive' : 'default'}
+              disabled={pending}
+              onClick={handleConfirm}
+            >
+              {pending ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Processando...
+                </>
+              ) : (
+                resolvedConfirmLabel
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
