@@ -1,5 +1,7 @@
 import 'server-only'
 
+import { cache } from 'react'
+
 // Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
 // O alias mantem os call sites identicos -- o que muda e a garantia.
 import { createAuthedClient as createClient } from '@/lib/auth'
@@ -41,7 +43,7 @@ import type {
  * calculo. Se a operacao passar desse volume, o ponto de troca e transformar
  * `summarizeTransactions` num RPC de agregacao -- as telas nao mudam.
  */
-const LIST_LIMIT = 20_000
+const LIST_LIMIT = 2_000
 
 /** Colunas minimas para somatorios acumulados (payload enxuto). */
 const SUMMARY_COLUMNS =
@@ -58,60 +60,60 @@ function unwrap<T>(result: { data: T[] | null; error: { message: string } | null
 /* Cadastros de apoio                                                          */
 /* -------------------------------------------------------------------------- */
 
-export async function getCostCenterNodes(): Promise<CostCenterNode[]> {
+export const getCostCenterNodes = cache(async (): Promise<CostCenterNode[]> => {
   const supabase = await createClient()
   const result = await supabase
     .from('v_cost_center_hierarchy')
     .select('*')
     .order('path', { ascending: true })
   return unwrap<CostCenterNode>(result, 'centros de custo')
-}
+})
 
-export async function getCategories(): Promise<Category[]> {
+export const getCategories = cache(async (): Promise<Category[]> => {
   const supabase = await createClient()
   const result = await supabase.from('categories').select('*').order('name')
   return unwrap<Category>(result, 'categorias')
-}
+})
 
-export async function getSuppliers(): Promise<Supplier[]> {
+export const getSuppliers = cache(async (): Promise<Supplier[]> => {
   const supabase = await createClient()
   const result = await supabase.from('suppliers').select('*').order('name')
   return unwrap<Supplier>(result, 'fornecedores')
-}
+})
 
-export async function getSupplierStats(): Promise<SupplierStats[]> {
+export const getSupplierStats = cache(async (): Promise<SupplierStats[]> => {
   const supabase = await createClient()
   const result = await supabase.from('v_supplier_stats').select('*').order('total_paid', {
     ascending: false,
   })
   return unwrap<SupplierStats>(result, 'fornecedores')
-}
+})
 
-export async function getChannels(): Promise<Channel[]> {
+export const getChannels = cache(async (): Promise<Channel[]> => {
   const supabase = await createClient()
   const result = await supabase.from('channels').select('*').order('name')
   return unwrap<Channel>(result, 'canais')
-}
+})
 
-export async function getPaymentMethods(): Promise<PaymentMethod[]> {
+export const getPaymentMethods = cache(async (): Promise<PaymentMethod[]> => {
   const supabase = await createClient()
   const result = await supabase.from('payment_methods').select('*').order('name')
   return unwrap<PaymentMethod>(result, 'formas de pagamento')
-}
+})
 
-export async function getProducts(): Promise<Product[]> {
+export const getProducts = cache(async (): Promise<Product[]> => {
   const supabase = await createClient()
   const result = await supabase.from('products').select('*').order('name')
   return enrichProducts(unwrap<Product>(result, 'produtos'))
-}
+})
 
-export async function getProductStats(): Promise<ProductStats[]> {
+export const getProductStats = cache(async (): Promise<ProductStats[]> => {
   const supabase = await createClient()
   const result = await supabase.from('v_product_stats').select('*').order('name')
   return enrichProductStats(unwrap<ProductStats>(result, 'produtos'))
-}
+})
 
-export async function getSettings(): Promise<Settings | null> {
+export const getSettings = cache(async (): Promise<Settings | null> => {
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('settings')
@@ -122,13 +124,13 @@ export async function getSettings(): Promise<Settings | null> {
 
   if (error) throw new Error(`Falha ao carregar configurações: ${error.message}`)
   return data as Settings | null
-}
+})
 
 /**
  * Cadastros usados pelos formularios e pela barra de filtros.
  * Uma unica chamada paralela em vez de seis sequenciais.
  */
-export async function getReferenceData() {
+export const getReferenceData = cache(async () => {
   const [costCenters, categories, suppliers, channels, paymentMethods, products] =
     await Promise.all([
       getCostCenterNodes(),
@@ -140,7 +142,7 @@ export async function getReferenceData() {
     ])
 
   return { costCenters, categories, suppliers, channels, paymentMethods, products }
-}
+})
 
 /* -------------------------------------------------------------------------- */
 /* Centros de custo -- drill-down                                              */

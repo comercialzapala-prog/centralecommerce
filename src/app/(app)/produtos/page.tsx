@@ -1,12 +1,10 @@
 import Link from 'next/link'
 import { Boxes, Eye, EyeOff, Package, ShoppingBag, TrendingUp, Truck } from 'lucide-react'
 
-import { StockMovementForm } from '@/app/(app)/movimentacoes/StockMovementForm'
-import { BoxGrid } from '@/components/BoxGrid'
 import { ConfirmActionButton } from '@/components/FormDialog'
 import { MetricCard } from '@/components/MetricCard'
 import { EmptyState, PageHeader } from '@/components/PageHeader'
-import { Badge } from '@/components/ui/badge'
+import { RouteTabs } from '@/components/RouteTabs'
 import {
   Table,
   TableBody,
@@ -15,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { getProducts, getProductStats } from '@/lib/data'
+import { getProductStats } from '@/lib/data'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -26,7 +24,7 @@ import { ProductForm, type PackagingOption } from './ProductForm'
 export const dynamic = 'force-dynamic'
 
 export default async function ProductsPage() {
-  const [products, allProductsList] = await Promise.all([getProductStats(), getProducts()])
+  const products = await getProductStats()
 
   const saleProducts = products.filter((p) => p.item_kind !== 'INSUMO')
   const packagingProducts = products.filter((p) => p.item_kind === 'INSUMO')
@@ -74,22 +72,24 @@ export default async function ProductsPage() {
   return (
     <>
       <PageHeader
-        title="Produtos & Giro de Sacolas"
-        description="Catálogo de mercadorias, vínculo inteligente de sacolas (P, M, G) com baixa automática na venda e controle de gasto de embalagem por produto."
+        title="Catálogo de Produtos"
+        description="Acompanhe estoque, ficha técnica, CMV, frete, sacola vinculada e margem líquida por SKU."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <PackagingLinkDialog
               products={linkableProducts}
               packagingOptions={packagingOptions}
             />
-            <ProductForm
-              defaultItemKind="INSUMO"
-              packagingOptions={packagingOptions}
-              triggerLabel="Nova sacola / embalagem"
-            />
             <ProductForm packagingOptions={packagingOptions} />
           </div>
         }
+      />
+
+      <RouteTabs
+        items={[
+          { href: '/produtos', label: 'Catálogo de Produtos', badge: saleProducts.length },
+          { href: '/sacolas', label: 'Sacolas & Embalagens', badge: packagingProducts.length },
+        ]}
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -102,9 +102,10 @@ export default async function ProductsPage() {
         <MetricCard
           title="Sacolas disponíveis"
           value={`${formatNumber(totalBagsAvailable)} un.`}
-          hint={`${formatNumber(totalBagsConsumed)} descontada(s) em vendas · Gasto: ${formatCurrency(totalBagsSpend)}`}
+          hint={`${formatNumber(totalBagsConsumed)} descontada(s) · Gasto: ${formatCurrency(totalBagsSpend)}`}
           tone={totalBagsAvailable > 0 ? 'accent' : 'warning'}
           icon={ShoppingBag}
+          href="/sacolas"
         />
         <MetricCard
           title="Receita dos produtos"
@@ -129,279 +130,6 @@ export default async function ProductsPage() {
         />
       </div>
 
-      {/* ----------------- GIRO INTELIGENTE DE SACOLAS & EMBALAGENS ----------------- */}
-      <section className="space-y-4 rounded-xl border bg-card p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <ShoppingBag className="size-4 text-sky-600 dark:text-sky-400" />
-              <h2 className="text-sm font-semibold">
-                Giro Inteligente de Sacolas &amp; Embalagens
-              </h2>
-              <Badge variant="outline">{packagingProducts.length} cadastrada(s)</Badge>
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Vincule cada produto à sacola que ele consome (ex.: Sacola P, Sacola M, Sacola G). Quando o produto é vendido, a sacola já é descontada automaticamente do estoque e o gasto fica rastreado por produto.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <PackagingLinkDialog
-              products={linkableProducts}
-              packagingOptions={packagingOptions}
-              triggerLabel="Vincular produto a uma sacola"
-              compact
-            />
-          </div>
-        </div>
-
-        {packagingProducts.length === 0 ? (
-          <EmptyState
-            title="Nenhuma sacola cadastrada"
-            description="Cadastre Sacola P, Sacola M, Sacola G para controlar o saldo e descontar automaticamente a cada venda."
-            action={
-              <ProductForm
-                defaultItemKind="INSUMO"
-                packagingOptions={packagingOptions}
-                triggerLabel="Cadastrar primeira sacola"
-              />
-            }
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            {packagingProducts.map((bag) => {
-              const bagStock = num(bag.stock_balance)
-              const bagIn = num(bag.qty_in)
-              const bagUsed = num(bag.packaging_qty_consumed ?? bag.qty_sold)
-              const bagUnitCost = num(bag.unit_cost)
-              const bagTotalSpent = num(bag.packaging_linked_cost_total)
-              const linkedProds = saleProducts.filter(
-                (p) => p.linked_packaging_product_id === bag.product_id,
-              )
-
-              return (
-                <div
-                  key={bag.product_id}
-                  className={cn(
-                    'flex flex-col justify-between gap-3 rounded-xl border bg-muted/15 p-3.5',
-                    !bag.active && 'opacity-55',
-                  )}
-                >
-                  <div className="space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <Link
-                          href={`/produtos/${bag.product_id}`}
-                          className="text-sm font-semibold hover:underline"
-                        >
-                          {bag.name}
-                        </Link>
-                        <div className="text-xs text-muted-foreground">
-                          {bag.sku ? `SKU ${bag.sku}` : 'Insumo'}
-                          {bag.capacity ? ` · ${bag.capacity}` : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <StockMovementForm
-                          products={allProductsList}
-                          defaultProductId={bag.product_id}
-                        />
-                        <ProductForm product={bag} packagingOptions={packagingOptions} />
-                      </div>
-                    </div>
-
-                    <BoxGrid
-                      columns={2}
-                      items={[
-                        {
-                          label: 'Saldo disponível',
-                          value: `${formatNumber(bagStock)} un.`,
-                          hint: `Entraram: ${formatNumber(bagIn)} un.`,
-                          tone:
-                            bagStock <= 0
-                              ? 'danger'
-                              : bagStock <= 15
-                                ? 'warning'
-                                : 'positive',
-                        },
-                        {
-                          label: 'Saídas nas vendas',
-                          value: `${formatNumber(bagUsed)} un.`,
-                          hint: 'Descontadas automaticamente',
-                          tone: bagUsed > 0 ? 'accent' : 'neutral',
-                        },
-                        {
-                          label: 'Custo unitário',
-                          value: formatCurrency(bagUnitCost),
-                          hint:
-                            bagUnitCost === 0
-                              ? 'Clique no lápis p/ definir custo'
-                              : 'Custo por sacola',
-                        },
-                        {
-                          label: 'Gasto acumulado',
-                          value: formatCurrency(bagTotalSpent),
-                          hint: `${formatNumber(bagUsed)} × ${formatCurrency(bagUnitCost)}`,
-                          tone: bagTotalSpent > 0 ? 'warning' : 'neutral',
-                        },
-                      ]}
-                    />
-
-                    <div className="rounded-lg border bg-background/60 p-2.5 text-xs">
-                      <div className="mb-1.5 flex items-center justify-between">
-                        <span className="font-medium text-muted-foreground">
-                          Produtos vinculados ({linkedProds.length})
-                        </span>
-                        <PackagingLinkDialog
-                          products={linkableProducts}
-                          packagingOptions={packagingOptions}
-                          defaultPackagingId={bag.product_id}
-                          triggerLabel="Vincular"
-                          compact
-                        />
-                      </div>
-                      {linkedProds.length === 0 ? (
-                        <p className="text-[11px] text-muted-foreground">
-                          Nenhum produto vinculado ainda. Clique em &ldquo;Vincular&rdquo; para escolher quais produtos usam {bag.name}.
-                        </p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {linkedProds.map((lp) => (
-                            <li
-                              key={lp.product_id}
-                              className="flex items-center justify-between gap-2 text-[11px]"
-                            >
-                              <Link
-                                href={`/produtos/${lp.product_id}`}
-                                className="truncate font-medium hover:underline"
-                              >
-                                {lp.sku ? `${lp.sku} — ` : ''}
-                                {lp.name}
-                              </Link>
-                              <span className="shrink-0 tabular-nums text-muted-foreground">
-                                {formatNumber(lp.linked_packaging_qty ?? 1)}x/venda ·{' '}
-                                {formatNumber(lp.packaging_qty_consumed ?? 0)} usada(s) (
-                                {formatCurrency(lp.packaging_linked_cost_total ?? 0)})
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Matriz de Gasto de Sacolas por Produto */}
-        {saleProducts.length > 0 ? (
-          <div className="space-y-2 border-t pt-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Relatório de Gasto de Sacolas por Produto
-              </h3>
-              <span className="text-xs text-muted-foreground">
-                Gasto total em sacolas nas vendas:{' '}
-                <strong className="text-foreground tabular-nums">
-                  {formatCurrency(totalBagsSpend)}
-                </strong>
-              </span>
-            </div>
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Produto Vendido</TableHead>
-                    <TableHead>Sacola Vinculada</TableHead>
-                    <TableHead className="text-right">Qtd. p/ Venda</TableHead>
-                    <TableHead className="text-right">Unid. Vendidas</TableHead>
-                    <TableHead className="text-right">Sacolas Descontadas</TableHead>
-                    <TableHead className="text-right">Custo Unit. Sacola</TableHead>
-                    <TableHead className="text-right">Gasto de Sacolas no Produto</TableHead>
-                    <TableHead className="w-[120px]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {saleProducts.map((prod) => {
-                    const hasBag = Boolean(prod.linked_packaging_product_id)
-                    const qtyPerSale = Math.max(1, num(prod.linked_packaging_qty ?? 1))
-                    const bagsConsumed = num(prod.packaging_qty_consumed)
-                    const bagUnitCost = num(prod.linked_packaging_unit_cost)
-                    const bagTotalCost = num(prod.packaging_linked_cost_total)
-
-                    return (
-                      <TableRow key={`bag-matrix-${prod.product_id}`}>
-                        <TableCell>
-                          <Link
-                            href={`/produtos/${prod.product_id}`}
-                            className="font-medium hover:underline"
-                          >
-                            {prod.name}
-                          </Link>
-                          {prod.sku ? (
-                            <span className="ml-2 font-mono text-xs text-muted-foreground">
-                              SKU {prod.sku}
-                            </span>
-                          ) : null}
-                        </TableCell>
-                        <TableCell>
-                          {hasBag ? (
-                            <Link
-                              href={`/produtos/${prod.linked_packaging_product_id}`}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                            >
-                              <ShoppingBag className="size-3" />
-                              {prod.linked_packaging_name}
-                              {prod.linked_packaging_stock !== undefined ? (
-                                <span className="text-[10px] opacity-80">
-                                  ({formatNumber(prod.linked_packaging_stock)} disp.)
-                                </span>
-                              ) : null}
-                            </Link>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              Sem sacola vinculada
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {hasBag ? `${formatNumber(qtyPerSale)} un.` : '--'}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatNumber(prod.qty_sold)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium tabular-nums">
-                          {hasBag ? `${formatNumber(bagsConsumed)} un.` : '--'}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {hasBag ? formatCurrency(bagUnitCost) : '--'}
-                        </TableCell>
-                        <TableCell className="text-right font-semibold tabular-nums text-amber-600 dark:text-amber-400">
-                          {hasBag ? formatCurrency(bagTotalCost) : '--'}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <PackagingLinkDialog
-                            products={linkableProducts}
-                            packagingOptions={packagingOptions}
-                            defaultProductId={prod.product_id}
-                            defaultPackagingId={prod.linked_packaging_product_id ?? undefined}
-                            defaultQty={qtyPerSale}
-                            triggerLabel={hasBag ? 'Trocar sacola' : 'Vincular sacola'}
-                            compact
-                          />
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-        ) : null}
-      </section>
-
-      {/* ----------------- TABELA PRINCIPAL DO CATALOGO DE PRODUTOS ----------------- */}
       {saleProducts.length === 0 ? (
         <EmptyState
           title="Nenhum produto de venda cadastrado"
@@ -470,10 +198,13 @@ export default async function ProductsPage() {
                           </div>
                         ) : null}
                         {product.linked_packaging_name ? (
-                          <div className="text-sky-600 dark:text-sky-400 font-medium">
+                          <Link
+                            href="/sacolas"
+                            className="inline-block text-sky-600 hover:underline dark:text-sky-400 font-medium"
+                          >
                             Sacola: {product.linked_packaging_name} (
                             {formatNumber(product.linked_packaging_qty ?? 1)}x)
-                          </div>
+                          </Link>
                         ) : null}
                       </div>
                     </TableCell>

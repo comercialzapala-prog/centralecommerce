@@ -5,7 +5,15 @@ import { GlobalFilterBar } from '@/components/GlobalFilterBar'
 import { MetricCard } from '@/components/MetricCard'
 import { PageHeader } from '@/components/PageHeader'
 import { TransactionsTable } from '@/components/TransactionsTable'
-import { getReferenceData, getTransactions, subtreeIds } from '@/lib/data'
+import {
+  getCategories,
+  getChannels,
+  getCostCenterNodes,
+  getPaymentMethods,
+  getSuppliers,
+  getTransactions,
+  subtreeIds,
+} from '@/lib/data'
 import { summarizeTransactions } from '@/lib/finance'
 import { describePeriod, parseFilters, type SearchParams } from '@/lib/filters'
 import { formatCurrency, formatDate } from '@/lib/format'
@@ -23,23 +31,30 @@ export default async function TransactionsPage({
   const params = await searchParams
   const filters = parseFilters(params)
 
-  const reference = await getReferenceData()
+  // Executa cadastros de apoio e (quando não há filtro de subárvore de centro) a listagem em paralelo
+  const [costCenters, categories, suppliers, channels, paymentMethods, directRows] =
+    await Promise.all([
+      getCostCenterNodes(),
+      getCategories(),
+      getSuppliers(),
+      getChannels(),
+      getPaymentMethods(),
+      filters.costCenterId ? Promise.resolve(null) : getTransactions(filters),
+    ])
 
-  // Filtrar por um centro traz junto os descendentes: quem filtra por
-  // "Expedicao" quer ver tambem o que caiu em "Sacolas".
   const costCenterIds = filters.costCenterId
-    ? subtreeIds(reference.costCenters, filters.costCenterId)
+    ? subtreeIds(costCenters, filters.costCenterId)
     : null
 
-  const rows = await getTransactions(filters, { costCenterIds })
+  const rows = directRows ?? (await getTransactions(filters, { costCenterIds }))
   const summary = summarizeTransactions(rows)
 
   const options = {
-    costCenters: reference.costCenters,
-    categories: reference.categories,
-    suppliers: reference.suppliers,
-    channels: reference.channels,
-    paymentMethods: reference.paymentMethods,
+    costCenters,
+    categories,
+    suppliers,
+    channels,
+    paymentMethods,
   }
 
   return (

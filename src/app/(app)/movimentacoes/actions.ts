@@ -22,7 +22,8 @@ import { STOCK_MOVEMENT_TYPES } from '@/lib/types'
 function revalidateStock() {
   revalidatePath('/movimentacoes')
   revalidatePath('/produtos', 'layout')
-  revalidatePath('/dashboard')
+  revalidatePath('/sacolas')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /**

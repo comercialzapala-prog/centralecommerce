@@ -5,8 +5,6 @@ import {
   Clock,
   Landmark,
   PiggyBank,
-  Receipt,
-  ShoppingCart,
   Target,
   TrendingUp,
   Wallet,
@@ -23,14 +21,15 @@ import { GlobalFilterBar } from '@/components/GlobalFilterBar'
 import { MetricCard } from '@/components/MetricCard'
 import { PageHeader } from '@/components/PageHeader'
 import { Progress50 } from '@/components/Progress50'
+import { RouteTabs } from '@/components/RouteTabs'
 import {
   getAllTransactionsForAccumulated,
+  getChannels,
+  getCostCenterNodes,
   getCostCenterReport,
   getInvestments,
-  getOrders,
-  getProductStats,
-  getReferenceData,
   getSettings,
+  getSuppliers,
   getTransactions,
   subtreeIds,
 } from '@/lib/data'
@@ -39,9 +38,7 @@ import {
   computeBreakEven,
   computeCash,
   expensesByCategory,
-  salesByChannel,
   summarizeByStatus,
-  summarizeOrders,
 } from '@/lib/finance'
 import { describePeriod, parseFilters, type SearchParams } from '@/lib/filters'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
@@ -56,50 +53,50 @@ export default async function DashboardPage({
   const params = await searchParams
   const filters = parseFilters(params)
 
-  const reference = await getReferenceData()
+  const [
+    costCenters,
+    channels,
+    suppliers,
+    allRows,
+    settings,
+    investments,
+    costCenterReport,
+    directPeriodRows,
+  ] = await Promise.all([
+    getCostCenterNodes(),
+    getChannels(),
+    getSuppliers(),
+    getAllTransactionsForAccumulated(),
+    getSettings(),
+    getInvestments(),
+    getCostCenterReport(filters),
+    filters.costCenterId ? Promise.resolve(null) : getTransactions(filters),
+  ])
 
   const costCenterIds = filters.costCenterId
-    ? subtreeIds(reference.costCenters, filters.costCenterId)
+    ? subtreeIds(costCenters, filters.costCenterId)
     : null
 
-  const [periodRows, allRows, settings, investments, costCenterReport, orders, products] =
-    await Promise.all([
-      getTransactions(filters, { costCenterIds }),
-      getAllTransactionsForAccumulated(),
-      getSettings(),
-      getInvestments(),
-      getCostCenterReport(filters),
-      getOrders(filters),
-      getProductStats(),
-    ])
-
-  /* ---------------- Financeiro ---------------- */
+  const periodRows = directPeriodRows ?? (await getTransactions(filters, { costCenterIds }))
 
   const snapshot = summarizeByStatus(periodRows)
-  // `period` = apenas PAGO — é o que realmente entrou/saiu do caixa no período.
-  // Pendentes ficam só na seção "Compromissos pendentes".
   const period = snapshot.paid
-  // Acumulado de TODA a vida separado por status: caixa usa só PAGO.
   const lifetimeSnapshot = summarizeByStatus(allRows)
   const lifetimePaid = lifetimeSnapshot.paid
-  const lifetime = lifetimeSnapshot.combined
 
   const investmentsPaid = investments
     .filter((item) => item.status === 'PAGO')
     .reduce((sum, item) => sum + num(item.amount), 0)
 
-  // O baseline das settings cobre o que foi investido antes do sistema existir.
   const investmentTotal = investmentsPaid + num(settings?.initial_investment)
 
   const cash = computeCash({
     initialBalance: num(settings?.initial_balance),
-    // Caixa = só PAGO. Pendente pode ser cancelado e nunca movimentou o caixa.
     transactionCashFlow: lifetimePaid.cashFlow,
     investmentsPaid,
   })
 
   const breakEven = computeBreakEven({
-    // Break-even usa só PAGO: pendente não é lucro até ser confirmado.
     accumulatedRevenue: lifetimePaid.revenue,
     accumulatedExpense: lifetimePaid.expense,
     investmentTotal,
@@ -107,31 +104,11 @@ export default async function DashboardPage({
 
   const series = buildMonthlySeries(allRows, investmentTotal)
 
-  /* ---------------- Para onde o dinheiro vai ---------------- */
-
   const byRootCostCenter = costCenterReport
     .filter((row) => row.depth === 1 && num(row.rollup_total) > 0)
     .sort((a, b) => num(b.rollup_total) - num(a.rollup_total))
 
   const byCategory = expensesByCategory(periodRows)
-
-  /* ---------------- Comercial ---------------- */
-
-  const sales = summarizeOrders(orders)
-  const channels = salesByChannel(orders)
-
-  const sold = products.filter((product) => num(product.qty_sold) > 0)
-  const topSold = [...sold].sort((a, b) => num(b.qty_sold) - num(a.qty_sold)).slice(0, 6)
-  const topRevenue = [...sold]
-    .sort((a, b) => num(b.revenue_amount) - num(a.revenue_amount))
-    .slice(0, 6)
-  const topMargin = [...sold]
-    .sort((a, b) => num(b.margin_amount) - num(a.margin_amount))
-    .slice(0, 5)
-  const worstMargin = [...sold]
-    .filter((product) => num(product.margin_amount) < 0)
-    .sort((a, b) => num(a.margin_amount) - num(b.margin_amount))
-    .slice(0, 5)
 
   const periodLabel = describePeriod(filters)
   const noInvestment = breakEven.state === 'SEM_INVESTIMENTO'
@@ -139,13 +116,24 @@ export default async function DashboardPage({
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        description="Quanto entrou, quanto saiu e para onde o dinheiro está indo."
+        title="Dashboard Financeiro & Caixa"
+        description="Quanto entrou, quanto saiu, progresso do break-even (0/50) e para onde o dinheiro está indo."
+      />
+
+      <RouteTabs
+        items={[
+          { href: '/dashboard', label: 'Financeiro & Caixa (0/50)', preserveQuery: true },
+          {
+            href: '/dashboard/comercial',
+            label: 'Comercial, Canais & Rankings',
+            preserveQuery: true,
+          },
+        ]}
       />
 
       <GlobalFilterBar
-        fields={['period', 'centro', 'canal', 'produto', 'fornecedor']}
-        options={reference}
+        fields={['period', 'centro', 'canal', 'fornecedor']}
+        options={{ costCenters, channels, suppliers }}
       />
 
       {/* ---------- Linha 1: o período filtrado ---------- */}
@@ -246,8 +234,6 @@ export default async function DashboardPage({
           tone={breakEven.accumulatedResult >= 0 ? 'positive' : 'negative'}
           icon={PiggyBank}
         />
-        {/* Sem investimento cadastrado nao existe break-even a atingir:
-            dizer "atingido" aqui contradiria o painel logo abaixo. */}
         <MetricCard
           title="Falta para o break-even"
           value={noInvestment ? '--' : formatCurrency(breakEven.remaining)}
@@ -282,7 +268,7 @@ export default async function DashboardPage({
         <Progress50 status={breakEven} />
       </section>
 
-      {/* ---------- Secao 26 ---------- */}
+      {/* ---------- Para onde o dinheiro vai ---------- */}
       <section className="space-y-2">
         <div className="flex items-baseline justify-between">
           <h2 className="text-sm font-semibold">Para onde nosso dinheiro está indo?</h2>
@@ -339,7 +325,6 @@ export default async function DashboardPage({
           )}
         </ChartCard>
 
-        {/* Secao 27: categoria e outra pergunta -- "o que e esse gasto?" */}
         <ChartCard
           title="Gastos por categoria"
           description="O que foi comprado, independente da área que consumiu."
@@ -413,167 +398,6 @@ export default async function DashboardPage({
           <Scale50Chart data={series} />
         )}
       </ChartCard>
-
-      {/* ---------- Secao 28: dashboard comercial ---------- */}
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold">Comercial</h2>
-          <Link
-            href="/vendas"
-            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-          >
-            Ver vendas
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <MetricCard
-            title="Faturamento"
-            value={formatCurrency(sales.revenue)}
-            hint={periodLabel}
-            tone="positive"
-            icon={TrendingUp}
-          />
-          <MetricCard title="Pedidos" value={formatNumber(sales.ordersCount)} icon={ShoppingCart} />
-          <MetricCard
-            title="Ticket médio"
-            value={formatCurrency(sales.averageTicket)}
-            icon={Receipt}
-          />
-          <MetricCard
-            title="Resultado comercial"
-            value={formatCurrency(sales.commercialResult)}
-            hint={`Margem de ${formatPercent(sales.marginPercent)}`}
-            tone={sales.commercialResult >= 0 ? 'positive' : 'negative'}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <ChartCard
-            title="Vendas por canal"
-            table={{
-              columns: ['Canal', 'Faturamento', 'Pedidos'],
-              rows: channels.map((entry) => [
-                entry.name,
-                formatCurrency(entry.revenue),
-                formatNumber(entry.orders),
-              ]),
-            }}
-          >
-            {channels.length === 0 ? (
-              <ChartEmpty message="Nenhum pedido no período." />
-            ) : (
-              <RankedBarChart
-                data={channels.map((entry) => ({
-                  id: entry.id,
-                  name: entry.name,
-                  total: entry.revenue,
-                }))}
-              />
-            )}
-          </ChartCard>
-
-          <ChartCard
-            title="Produtos mais vendidos"
-            description="Por quantidade de unidades."
-            table={{
-              columns: ['Produto', 'Unidades', 'Receita'],
-              rows: topSold.map((product) => [
-                product.name,
-                formatNumber(product.qty_sold),
-                formatCurrency(product.revenue_amount),
-              ]),
-            }}
-          >
-            {topSold.length === 0 ? (
-              <ChartEmpty message="Nenhuma venda registrada." />
-            ) : (
-              <RankedBarChart
-                data={topSold.map((product) => ({
-                  id: product.product_id,
-                  name: product.name,
-                  total: num(product.qty_sold),
-                }))}
-                accent="series-2"
-                valueFormatter={(value) => formatNumber(value)}
-              />
-            )}
-          </ChartCard>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <ProductRanking
-            title="Maior receita"
-            products={topRevenue.slice(0, 5)}
-            pick={(product) => formatCurrency(product.revenue_amount)}
-          />
-          <ProductRanking
-            title="Maior margem"
-            products={topMargin}
-            pick={(product) =>
-              `${formatCurrency(product.margin_amount)} · ${formatPercent(product.margin_percent)}`
-            }
-            tone="positive"
-          />
-          <ProductRanking
-            title="Maior prejuízo"
-            products={worstMargin}
-            pick={(product) => formatCurrency(product.margin_amount)}
-            tone="negative"
-            emptyMessage="Nenhum produto com margem negativa."
-          />
-        </div>
-      </section>
     </>
-  )
-}
-
-function ProductRanking<T extends { product_id: string; name: string }>({
-  title,
-  products,
-  pick,
-  tone = 'neutral',
-  emptyMessage = 'Nenhuma venda registrada.',
-}: {
-  title: string
-  products: T[]
-  pick: (product: T) => string
-  tone?: 'positive' | 'negative' | 'neutral'
-  emptyMessage?: string
-}) {
-  return (
-    <section className="rounded-xl border bg-card p-4">
-      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
-      {products.length === 0 ? (
-        <p className="py-4 text-sm text-muted-foreground">{emptyMessage}</p>
-      ) : (
-        <ol className="space-y-1.5">
-          {products.map((product, index) => (
-            <li key={product.product_id} className="flex items-center gap-2 text-sm">
-              <span className="w-4 shrink-0 text-xs text-muted-foreground tabular-nums">
-                {index + 1}
-              </span>
-              <Link
-                href={`/produtos/${product.product_id}`}
-                className="min-w-0 flex-1 truncate hover:underline"
-              >
-                {product.name}
-              </Link>
-              <span
-                className={
-                  tone === 'positive'
-                    ? 'shrink-0 text-emerald-600 tabular-nums dark:text-emerald-400'
-                    : tone === 'negative'
-                      ? 'shrink-0 text-rose-600 tabular-nums dark:text-rose-400'
-                      : 'shrink-0 tabular-nums'
-                }
-              >
-                {pick(product)}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
   )
 }

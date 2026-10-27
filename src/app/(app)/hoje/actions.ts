@@ -33,8 +33,8 @@ import { ALERT_STATUS_ORDER } from '@/lib/hoje'
  */
 
 function revalidateHoje() {
-  revalidatePath('/hoje')
-  revalidatePath('/dashboard')
+  revalidatePath('/hoje', 'layout')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /**

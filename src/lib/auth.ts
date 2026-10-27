@@ -124,10 +124,10 @@ export const requireMembership = cache(async (): Promise<AuthContext> => {
  * importam com alias (`createAuthedClient as createClient`) para que o call site
  * fique identico ao de antes -- o que muda e a garantia, nao o codigo.
  */
-export async function createAuthedClient(): Promise<SupabaseClient> {
+export const createAuthedClient = cache(async (): Promise<SupabaseClient> => {
   await requireMembership()
   return createClient()
-}
+})
 
 /**
  * Encerra a sessao. Chamado pelo botao de sair.

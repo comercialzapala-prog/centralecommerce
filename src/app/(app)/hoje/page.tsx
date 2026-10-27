@@ -1,15 +1,11 @@
-import Link from 'next/link'
 import type { Metadata } from 'next'
 import {
   CircleAlert,
   Clock,
-  EyeOff,
-  Lightbulb,
   PackageSearch,
   PlugZap,
   Receipt,
   ShoppingCart,
-  Sparkles,
   TrendingUp,
 } from 'lucide-react'
 
@@ -19,6 +15,7 @@ import { HojeFilterBar } from '@/components/hoje/HojeFilterBar'
 import { HojeToolbar } from '@/components/hoje/HojeToolbar'
 import { MetricCard, type MetricTone } from '@/components/MetricCard'
 import { EmptyState, PageHeader } from '@/components/PageHeader'
+import { RouteTabs } from '@/components/RouteTabs'
 import { Badge } from '@/components/ui/badge'
 import { requireMembership } from '@/lib/auth'
 import {
@@ -27,10 +24,8 @@ import {
   getHojeSummary,
   getLastAuditorRun,
   getLastReviewedAt,
-  getOpenRecommendations,
-  getRecommendationOutcomes,
-  getResolvedAlerts,
   getOrders,
+  getResolvedAlerts,
   getTransactions,
 } from '@/lib/data'
 import { EMPTY_FILTERS, resolvePeriod, type SearchParams } from '@/lib/filters'
@@ -49,10 +44,6 @@ import {
 } from '@/lib/hoje'
 
 import { markReviewed, openAlert, runAnalysis, setAlertStatus } from './actions'
-
-/**
- * /hoje -- A CENTRAL OPERACIONAL DIARIA (secao 30)
- */
 
 export const metadata: Metadata = {
   title: 'Hoje | Control Center',
@@ -85,8 +76,6 @@ export default async function HojePage({
     rawAlerts,
     seenAlerts,
     resolvedAlerts,
-    recommendations,
-    outcomes,
     lastRun,
     lastReviewedAt,
     channels,
@@ -103,8 +92,6 @@ export default async function HojePage({
     }),
     getAlerts(organizationId, { statuses: SEEN_STATUSES }),
     getResolvedAlerts(organizationId, 8),
-    getOpenRecommendations(organizationId, 12),
-    getRecommendationOutcomes(organizationId, 5),
     getLastAuditorRun(organizationId),
     getLastReviewedAt(organizationId, user.id),
     getAlertChannels(organizationId),
@@ -139,7 +126,7 @@ export default async function HojePage({
   return (
     <>
       <PageHeader
-        title="Hoje"
+        title="Hoje — Alertas & Prioridades"
         description={
           neverRan
             ? 'A análise ainda não foi executada nesta operação.'
@@ -152,6 +139,17 @@ export default async function HojePage({
             hasReviewState={Boolean(lastReviewedAt)}
           />
         }
+      />
+
+      <RouteTabs
+        items={[
+          { href: '/hoje', label: 'Alertas & Prioridades', badge: alerts.length },
+          {
+            href: '/hoje/recomendacoes',
+            label: 'Recomendações & Histórico',
+            badge: seenAlerts.length + resolvedAlerts.length,
+          },
+        ]}
       />
 
       {lastRun?.status === 'FAILED' ? (
@@ -276,8 +274,7 @@ export default async function HojePage({
             <h2 className="text-sm font-semibold">Prioridades de hoje</h2>
             <p className="text-xs text-muted-foreground">
               Ordem por severidade, depois por impacto financeiro calculado, depois por domínio —
-              sem pontuação arbitrária. Os critérios completos estão em{' '}
-              <code>src/domain/auditor/index.ts</code>.
+              sem pontuação arbitrária.
             </p>
           </div>
           <div className="space-y-2">
@@ -306,7 +303,7 @@ export default async function HojePage({
           title="Nada exige atenção agora"
           description={
             kpis.hidden > 0
-              ? `${formatNumber(kpis.hidden)} alerta(s) que você já viu estão fora da lista. Eles continuam em “Já vistos”, no fim da página.`
+              ? `${formatNumber(kpis.hidden)} alerta(s) que você já viu estão fora da lista. Eles continuam na aba “Recomendações & Histórico”.`
               : lastRun?.findings_total === 0
                 ? 'A última análise não encontrou problema nas regras configuradas. Quando algo mudar, aparece aqui.'
                 : 'Nenhum alerta corresponde aos filtros aplicados. Limpe os filtros para ver tudo.'
@@ -347,8 +344,7 @@ export default async function HojePage({
           <div>
             <h2 className="text-sm font-semibold">Financeiro</h2>
             <p className="text-xs text-muted-foreground">
-              Compromissos já assumidos e ainda não pagos. Não são alertas do auditor: são fatos do
-              seu financeiro, somados por <code>finance.ts</code>.
+              Compromissos já assumidos e ainda não pagos.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -377,140 +373,6 @@ export default async function HojePage({
         </section>
       ) : null}
 
-      {/* ----------------- Recomendacoes ----------------- */}
-      {recommendations.length > 0 ? (
-        <section className="space-y-2.5">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <h2 className="text-sm font-semibold">Recomendações</h2>
-            <Badge variant="outline">{recommendations.length}</Badge>
-            <p className="w-full text-xs text-muted-foreground">
-              Sugestões calculadas pelas regras. Nenhuma é aplicada automaticamente e nada é escrito
-              no Bling — a integração está em modo somente leitura.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            {recommendations.map((item) => (
-              <article key={item.id} className="space-y-2.5 rounded-xl border bg-card p-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={14} className="shrink-0 text-sky-600 dark:text-sky-400" />
-                  <Badge variant="secondary">{item.kind}</Badge>
-                  <h3 className="text-sm font-medium leading-snug">{item.title}</h3>
-                </div>
-                <BoxGrid
-                  columns={2}
-                  items={[
-                    {
-                      label: 'Motivo da recomendação',
-                      value: item.reason,
-                      span: item.current_value !== null && item.proposed_value !== null ? 1 : 2,
-                    },
-                    ...(item.current_value !== null && item.proposed_value !== null
-                      ? [
-                          {
-                            label: 'Ajuste sugerido',
-                            value: `${formatNumber(item.current_value)} → ${formatNumber(item.proposed_value)}`,
-                            tone: 'accent' as const,
-                          },
-                        ]
-                      : []),
-                  ]}
-                />
-                {item.product_id ? (
-                  <Link
-                    href={`/produtos/${item.product_id}`}
-                    className="inline-block text-xs font-medium text-primary hover:underline"
-                  >
-                    Ver produto
-                  </Link>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* ----------------- Resultado das recomendacoes (secao 31) ----------------- */}
-      {outcomes.length > 0 ? (
-        <section className="space-y-2.5">
-          <h2 className="text-sm font-semibold">A recomendação foi boa?</h2>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            {outcomes.map((outcome) => (
-              <BoxGrid
-                key={outcome.id}
-                columns={2}
-                items={[
-                  {
-                    label: 'Veredito',
-                    value: outcome.verdict ?? 'SEM VEREDITO',
-                    hint: `Medido ${formatDateTime(outcome.measured_at)} · janela de ${outcome.window_days} dias`,
-                    tone: outcome.verdict === 'POSITIVE' ? 'positive' : 'neutral',
-                  },
-                  {
-                    label: 'Observações',
-                    value: outcome.notes ?? 'Sem observações adicionais',
-                  },
-                ]}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* ----------------- Ja vistos ----------------- */}
-      {!filters.status && seenAlerts.length > 0 ? (
-        <details className="rounded-xl border bg-card p-4">
-          <summary className="cursor-pointer text-sm font-semibold">
-            <span className="inline-flex flex-wrap items-center gap-2">
-              <EyeOff size={14} className="text-muted-foreground" />
-              Já vistos
-              <Badge variant="outline">{formatNumber(seenAlerts.length)}</Badge>
-            </span>
-          </summary>
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Saíram da lista porque você já leu — não porque deixaram de existir. Se um deles
-            piorar, severidade ou impacto maior, a próxima análise devolve ele para a lista
-            sozinho. Para nunca mais ver um alerta, use “Ignorar”.
-          </p>
-          <div className="mt-3 space-y-2">
-            {prioritizeAlerts(seenAlerts).map((alert) => (
-              <AlertCard
-                key={alert.id}
-                alert={alert}
-                setStatus={setAlertStatus}
-                openTarget={openAlert}
-                showEvidence={false}
-              />
-            ))}
-          </div>
-        </details>
-      ) : null}
-
-      {/* ----------------- Resolvidos recentemente ----------------- */}
-      {resolvedAlerts.length > 0 ? (
-        <section className="space-y-2.5">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <Lightbulb size={14} className="text-emerald-600 dark:text-emerald-400" />
-            <h2 className="text-sm font-semibold">Resolvidos recentemente</h2>
-            <Badge variant="outline">{num(summary?.resolved_7d)} nos últimos 7 dias</Badge>
-            <p className="w-full text-xs text-muted-foreground">
-              Fechados por você ou pelo próprio auditor, quando o problema deixou de existir. É o que
-              impede esta página de ser só uma lista que cresce.
-            </p>
-          </div>
-          <div className="space-y-2">
-            {resolvedAlerts.map((alert) => (
-              <AlertCard
-                key={alert.id}
-                alert={alert}
-                setStatus={setAlertStatus}
-                openTarget={openAlert}
-                showEvidence={false}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       <p className="border-t pt-3 text-xs text-muted-foreground">
         {formatNumber(criticalCount)} crítico(s) · {formatNumber(importantCount)} de atenção ·{' '}
         {formatNumber(opportunityCount)} informativo(s). Todas as regras são determinísticas: nenhum
@@ -520,7 +382,6 @@ export default async function HojePage({
   )
 }
 
-/** Tom da margem do dia. Sem venda nao ha margem a colorir. */
 function marginTone(revenue: number, marginPercent: number): MetricTone {
   if (revenue <= 0) return 'neutral'
   if (marginPercent < 0) return 'negative'

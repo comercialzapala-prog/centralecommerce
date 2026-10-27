@@ -24,10 +24,11 @@ import type { ProductCatalogSpec, ProductItemKind } from '@/lib/types'
 
 function revalidateProducts() {
   revalidatePath('/produtos', 'layout')
+  revalidatePath('/sacolas')
   revalidatePath('/movimentacoes')
   revalidatePath('/vendas', 'layout')
-  revalidatePath('/dashboard')
-  revalidatePath('/hoje')
+  revalidatePath('/dashboard', 'layout')
+  revalidatePath('/hoje', 'layout')
 }
 
 function readProduct(formData: FormData) {

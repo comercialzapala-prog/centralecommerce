@@ -1,5 +1,7 @@
 import 'server-only'
 
+import { cache } from 'react'
+
 import { IntegrationService } from '@/integrations/erp/service'
 import { createAuthedClient as createClient } from '@/lib/auth'
 import { num, round2 } from '@/lib/format'
@@ -84,40 +86,45 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
   }
 }
 
-export async function loadProductCatalogSpecs(): Promise<Map<string, ProductCatalogSpec>> {
-  const supabase = await createClient()
-  const { data } = await supabase
-    .from('erp_snapshots')
-    .select('source,external_id,data')
-    .eq('resource_type', 'PRODUCT')
-    .is('deleted_at', null)
+export const loadProductCatalogSpecs = cache(
+  async (): Promise<Map<string, ProductCatalogSpec>> => {
+    const supabase = await createClient()
+    const { data } = await supabase
+      .from('erp_snapshots')
+      .select('source,external_id,data')
+      .eq('resource_type', 'PRODUCT')
+      .is('deleted_at', null)
 
-  const map = new Map<string, ProductCatalogSpec>()
-  if (!data) return map
+    const map = new Map<string, ProductCatalogSpec>()
+    if (!data) return map
 
-  const sorted = [...data].sort((a, b) => (a.source === 'CENTRAL' ? 1 : b.source === 'CENTRAL' ? -1 : 0))
-  for (const row of sorted) {
-    const extId = String(row.external_id ?? '')
-    if (!extId) continue
-    const parsed = parseCatalogSpec((row.data ?? {}) as Record<string, unknown>)
-    const prev = map.get(extId) ?? {}
-    const merged: ProductCatalogSpec = {
-      ...prev,
-      ...Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => value !== undefined),
-      ),
+    const sorted = [...data].sort((a, b) =>
+      a.source === 'CENTRAL' ? 1 : b.source === 'CENTRAL' ? -1 : 0,
+    )
+    for (const row of sorted) {
+      const extId = String(row.external_id ?? '')
+      if (!extId) continue
+      const parsed = parseCatalogSpec((row.data ?? {}) as Record<string, unknown>)
+      const prev = map.get(extId) ?? {}
+      const merged: ProductCatalogSpec = {
+        ...prev,
+        ...Object.fromEntries(
+          Object.entries(parsed).filter(([, value]) => value !== undefined),
+        ),
+      }
+      map.set(extId, merged)
+      const skuKey =
+        typeof (row.data as Record<string, unknown>)?.sku === 'string'
+          ? String((row.data as Record<string, unknown>).sku).trim()
+          : ''
+      if (skuKey) {
+        map.set(skuKey, { ...(map.get(skuKey) ?? {}), ...merged })
+      }
     }
-    map.set(extId, merged)
-    const skuKey = typeof (row.data as Record<string, unknown>)?.sku === 'string'
-      ? String((row.data as Record<string, unknown>).sku).trim()
-      : ''
-    if (skuKey) {
-      map.set(skuKey, { ...(map.get(skuKey) ?? {}), ...merged })
-    }
-  }
 
-  return map
-}
+    return map
+  },
+)
 
 export async function enrichProducts(products: Product[]): Promise<Product[]> {
   if (products.length === 0) return products

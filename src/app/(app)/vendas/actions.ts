@@ -28,9 +28,10 @@ import { ORDER_STATUSES } from '@/lib/types'
 function revalidateSales() {
   revalidatePath('/vendas', 'layout')
   revalidatePath('/produtos', 'layout')
+  revalidatePath('/sacolas')
   revalidatePath('/movimentacoes')
-  revalidatePath('/dashboard')
-  revalidatePath('/hoje')
+  revalidatePath('/dashboard', 'layout')
+  revalidatePath('/hoje', 'layout')
 }
 
 /** Cabecalho do pedido. gross_amount e total_amount sao calculados no banco. */

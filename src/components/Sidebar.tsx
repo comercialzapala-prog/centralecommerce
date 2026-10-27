@@ -11,6 +11,7 @@ import {
   PlugZap,
   Receipt,
   Settings as SettingsIcon,
+  ShoppingBag,
   ShoppingCart,
   Tags,
   TrendingUp,
@@ -47,6 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: '/vendas', label: 'Vendas', icon: ShoppingCart },
       { href: '/produtos', label: 'Produtos', icon: Package },
+      { href: '/sacolas', label: 'Sacolas & Embalagens', icon: ShoppingBag },
     ],
   },
   {
