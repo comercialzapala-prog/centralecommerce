@@ -61,7 +61,8 @@ export function StockMovementsTable({
           {rows.map((row) => {
             const signed = row.signed_quantity
             const cancelled = row.order?.status === 'CANCELADO'
-            const automatic = Boolean(row.order_item_id)
+            const automatic =
+              Boolean(row.order_item_id) || Boolean(row.notes?.startsWith('PACKAGING_LINK|'))
 
             return (
               <TableRow key={row.id} className={cn(cancelled && 'opacity-50')}>

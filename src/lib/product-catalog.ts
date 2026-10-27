@@ -3,18 +3,19 @@ import 'server-only'
 import { IntegrationService } from '@/integrations/erp/service'
 import { createAuthedClient as createClient } from '@/lib/auth'
 import { num, round2 } from '@/lib/format'
-import type { Product, ProductCatalogSpec, ProductStats } from '@/lib/types'
+import type {
+  PackagingConsumptionByProduct,
+  Product,
+  ProductCatalogSpec,
+  ProductItemKind,
+  ProductStats,
+} from '@/lib/types'
 
 /**
- * FICHA TÉCNICA E PARÂMETROS UNITÁRIOS DE FRETE/TAXAS POR PRODUTO
+ * FICHA TÉCNICA, VÍNCULO DE SACOLAS/EMBALAGENS E PARÂMETROS UNITÁRIOS POR PRODUTO
  *
  * Persistidos em `erp_snapshots` (source='CENTRAL', resource_type='PRODUCT',
  * external_id=product.id) e mesclados com eventual snapshot do ERP ('BLING').
- *
- * Permite armazenar NCM, EAN/GTIN, ASIN, pesos (líquido e com embalagem),
- * referência do fabricante/fornecedor e parâmetros de cálculo automático de
- * venda (frete unitário, embalagem unitária, comissão % e imposto %) sem
- * exigir colunas de canal fixas em `products`.
  */
 
 function strOrNull(v: unknown): string | null {
@@ -29,6 +30,16 @@ function intOrNull(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null
 }
 
+function parseItemKind(v: unknown, name?: unknown, category?: unknown): ProductItemKind {
+  if (v === 'INSUMO' || v === 'PRODUTO') return v
+  const nameStr = typeof name === 'string' ? name.toUpperCase() : ''
+  const catStr = typeof category === 'string' ? category.toUpperCase() : ''
+  if (nameStr.startsWith('SACOLA ') || catStr.includes('SACOLA') || catStr.includes('EMBALAGEN')) {
+    return 'INSUMO'
+  }
+  return 'PRODUTO'
+}
+
 export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined): ProductCatalogSpec {
   if (!raw) return {}
 
@@ -37,7 +48,16 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
     intOrNull(raw.gross_weight_grams ?? raw.grossWeightGrams) ??
     (Number.isFinite(weightKg) && weightKg > 0 ? Math.round(weightKg * 1000) : null)
 
+  const linkedPkgId = strOrNull(raw.linked_packaging_product_id ?? raw.linkedPackagingProductId)
+  const linkedPkgQty = intOrNull(raw.linked_packaging_qty ?? raw.linkedPackagingQty) ?? (linkedPkgId ? 1 : null)
+
   return {
+    item_kind:
+      raw.item_kind === 'INSUMO' || raw.item_kind === 'PRODUTO'
+        ? (raw.item_kind as ProductItemKind)
+        : undefined,
+    linked_packaging_product_id: linkedPkgId,
+    linked_packaging_qty: linkedPkgQty,
     asin: strOrNull(raw.asin),
     ean: strOrNull(raw.ean ?? raw.gtin),
     ncm: strOrNull(raw.ncm),
@@ -75,7 +95,6 @@ export async function loadProductCatalogSpecs(): Promise<Map<string, ProductCata
   const map = new Map<string, ProductCatalogSpec>()
   if (!data) return map
 
-  // Aplica primeiro snapshots de ERP e por cima os da CENTRAL (external_id = product.id ou sku).
   const sorted = [...data].sort((a, b) => (a.source === 'CENTRAL' ? 1 : b.source === 'CENTRAL' ? -1 : 0))
   for (const row of sorted) {
     const extId = String(row.external_id ?? '')
@@ -85,7 +104,7 @@ export async function loadProductCatalogSpecs(): Promise<Map<string, ProductCata
     const merged: ProductCatalogSpec = {
       ...prev,
       ...Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => value !== null && value !== undefined),
+        Object.entries(parsed).filter(([, value]) => value !== undefined),
       ),
     }
     map.set(extId, merged)
@@ -103,13 +122,39 @@ export async function loadProductCatalogSpecs(): Promise<Map<string, ProductCata
 export async function enrichProducts(products: Product[]): Promise<Product[]> {
   if (products.length === 0) return products
   const specs = await loadProductCatalogSpecs()
-  return products.map((product) => {
+
+  const baseEnriched = products.map((product) => {
     const bySku = product.sku ? specs.get(product.sku.trim()) : undefined
     const byId = specs.get(product.id)
+    const mergedSpec: ProductCatalogSpec = { ...(bySku ?? {}), ...(byId ?? {}) }
+    const itemKind = parseItemKind(mergedSpec.item_kind, product.name, product.category)
     return {
       ...product,
-      ...(bySku ?? {}),
-      ...(byId ?? {}),
+      ...mergedSpec,
+      item_kind: itemKind,
+    }
+  })
+
+  const byIdMap = new Map(baseEnriched.map((p) => [p.id, p]))
+
+  return baseEnriched.map((product) => {
+    const pkgId = product.linked_packaging_product_id
+    const pkgProd = pkgId ? byIdMap.get(pkgId) : undefined
+    const pkgQty = Math.max(1, num(product.linked_packaging_qty ?? 1))
+    const linkedUnitCost = pkgProd ? num(pkgProd.unit_cost) : 0
+    const effectivePackagingCost =
+      num(product.packaging_cost) > 0
+        ? num(product.packaging_cost)
+        : pkgProd
+          ? round2(linkedUnitCost * pkgQty)
+          : 0
+
+    return {
+      ...product,
+      packaging_cost: effectivePackagingCost,
+      linked_packaging_name: pkgProd?.name ?? null,
+      linked_packaging_sku: pkgProd?.sku ?? null,
+      linked_packaging_unit_cost: linkedUnitCost,
     }
   })
 }
@@ -126,16 +171,113 @@ type SalesFactRow = {
   other_costs: number | string
 }
 
+type PackagingMovementRow = {
+  product_id: string
+  quantity: number
+  notes: string | null
+  order: { status: string } | { status: string }[] | null
+}
+
+function parsePackagingMovementNote(notes: string | null): {
+  orderItemId: string | null
+  parentProductId: string | null
+} {
+  if (!notes || !notes.startsWith('PACKAGING_LINK|')) {
+    return { orderItemId: null, parentProductId: null }
+  }
+  let orderItemId: string | null = null
+  let parentProductId: string | null = null
+  for (const part of notes.split('|')) {
+    if (part.startsWith('order_item_id:')) {
+      orderItemId = part.slice('order_item_id:'.length).trim() || null
+    } else if (part.startsWith('parent_product_id:')) {
+      parentProductId = part.slice('parent_product_id:'.length).trim() || null
+    }
+  }
+  return { orderItemId, parentProductId }
+}
+
 export async function enrichProductStats(rows: ProductStats[]): Promise<ProductStats[]> {
   if (rows.length === 0) return rows
 
   const supabase = await createClient()
-  const [specs, salesRes] = await Promise.all([
+  const [specs, salesRes, allStatsRes, pkgMovementsRes] = await Promise.all([
     loadProductCatalogSpecs(),
     supabase
       .from('v_sales_fact')
       .select('product_id,quantity,gross_revenue,shipping_cost,fees,tax,packaging,ads_attributed,other_costs'),
+    rows.length === 1
+      ? supabase.from('v_product_stats').select('*')
+      : Promise.resolve({ data: rows }),
+    supabase
+      .from('stock_movements')
+      .select('product_id,quantity,notes,order:orders(status)')
+      .like('notes', 'PACKAGING_LINK|%'),
   ])
+
+  const allStats = ((allStatsRes.data ?? rows) as ProductStats[]).map((row) => {
+    const bySku = row.sku ? specs.get(row.sku.trim()) : undefined
+    const byId = specs.get(row.product_id)
+    const spec: ProductCatalogSpec = { ...(bySku ?? {}), ...(byId ?? {}) }
+    const itemKind = parseItemKind(spec.item_kind, row.name, row.category)
+    return {
+      ...row,
+      ...spec,
+      item_kind: itemKind,
+    }
+  })
+
+  const statsById = new Map<string, ProductStats>(allStats.map((r) => [r.product_id, r]))
+
+  // Soma movimentos reais de baixa automática de sacolas por (parentProductId, packagingProductId)
+  const recordedPkgByPair = new Map<string, number>()
+  for (const mov of (pkgMovementsRes.data ?? []) as PackagingMovementRow[]) {
+    const ord = Array.isArray(mov.order) ? mov.order[0] : mov.order
+    if (ord?.status === 'CANCELADO') continue
+    const { parentProductId } = parsePackagingMovementNote(mov.notes)
+    if (!parentProductId) continue
+    const key = `${parentProductId}::${mov.product_id}`
+    recordedPkgByPair.set(key, (recordedPkgByPair.get(key) ?? 0) + Math.abs(num(mov.quantity)))
+  }
+
+  // Monta a matriz de consumo de sacolas por produto (tanto pelo vínculo atual quanto pelo histórico)
+  const consumptionByPackagingId = new Map<string, PackagingConsumptionByProduct[]>()
+  const consumptionByProductId = new Map<string, PackagingConsumptionByProduct>()
+
+  for (const prod of allStats) {
+    if (prod.item_kind === 'INSUMO') continue
+    const pkgId = prod.linked_packaging_product_id
+    if (!pkgId) continue
+    const pkgStat = statsById.get(pkgId)
+    if (!pkgStat) continue
+
+    const qtyPerUnit = Math.max(1, num(prod.linked_packaging_qty ?? 1))
+    const unitsSold = Math.max(0, num(prod.qty_sold))
+    const pairKey = `${prod.product_id}::${pkgId}`
+    const recordedQty = recordedPkgByPair.get(pairKey) ?? 0
+    const qtyConsumed = Math.max(recordedQty, unitsSold * qtyPerUnit)
+    const unitCost = num(pkgStat.unit_cost)
+    const totalCost = round2(qtyConsumed * unitCost)
+
+    const entry: PackagingConsumptionByProduct = {
+      product_id: prod.product_id,
+      product_name: prod.name,
+      product_sku: prod.sku,
+      packaging_product_id: pkgId,
+      packaging_name: pkgStat.name,
+      packaging_sku: pkgStat.sku,
+      qty_per_unit: qtyPerUnit,
+      units_sold: unitsSold,
+      qty_consumed: qtyConsumed,
+      unit_cost: unitCost,
+      total_cost: totalCost,
+    }
+
+    consumptionByProductId.set(prod.product_id, entry)
+    const list = consumptionByPackagingId.get(pkgId) ?? []
+    list.push(entry)
+    consumptionByPackagingId.set(pkgId, list)
+  }
 
   const salesByProduct = new Map<string, SalesFactRow[]>()
   for (const sale of (salesRes.data ?? []) as SalesFactRow[]) {
@@ -145,15 +287,22 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
     salesByProduct.set(sale.product_id, list)
   }
 
-  return rows.map((row) => {
-    const bySku = row.sku ? specs.get(row.sku.trim()) : undefined
-    const byId = specs.get(row.product_id)
-    const spec: ProductCatalogSpec = { ...(bySku ?? {}), ...(byId ?? {}) }
+  return rows.map((rawRow) => {
+    const row = statsById.get(rawRow.product_id) ?? rawRow
+    const pkgId = row.linked_packaging_product_id
+    const pkgStat = pkgId ? statsById.get(pkgId) : undefined
+    const pkgQtyPerUnit = Math.max(1, num(row.linked_packaging_qty ?? 1))
+    const linkedPkgUnitCost = pkgStat ? num(pkgStat.unit_cost) : 0
 
-    const unitShipping = num(spec.shipping_cost)
-    const unitPackaging = num(spec.packaging_cost)
-    const mktPercent = num(spec.marketplace_percent)
-    const taxPercent = num(spec.tax_percent)
+    const unitShipping = num(row.shipping_cost)
+    const unitPackaging =
+      num(row.packaging_cost) > 0
+        ? num(row.packaging_cost)
+        : pkgStat
+          ? round2(linkedPkgUnitCost * pkgQtyPerUnit)
+          : 0
+    const mktPercent = num(row.marketplace_percent)
+    const taxPercent = num(row.tax_percent)
 
     const sales = salesByProduct.get(row.product_id) ?? []
     let shippingAmount = 0
@@ -170,13 +319,18 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
       const recordedFees = num(s.fees)
       const recordedTax = num(s.tax)
 
-      // Se o pedido do ERP veio sem frete/taxas preenchidos no cabeçalho,
-      // aplica automaticamente o frete/taxa unitário cadastrado no nosso produto.
       shippingAmount += recordedShipping > 0 ? recordedShipping : qty * unitShipping
       packagingAmount += recordedPackaging > 0 ? recordedPackaging : qty * unitPackaging
       feesAmount += recordedFees > 0 ? recordedFees : gross * (mktPercent / 100)
       taxAmount += recordedTax > 0 ? recordedTax : gross * (taxPercent / 100)
       otherAmount += num(s.ads_attributed) + num(s.other_costs)
+    }
+
+    const prodConsumption = consumptionByProductId.get(row.product_id)
+    const insumoConsumptions = consumptionByPackagingId.get(row.product_id) ?? []
+
+    if (prodConsumption && prodConsumption.total_cost > packagingAmount) {
+      packagingAmount = prodConsumption.total_cost
     }
 
     shippingAmount = round2(shippingAmount)
@@ -190,9 +344,16 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
     const netMarginAmount = round2(revenue - cogs - extraCostsAmount)
     const netMarginPercent = revenue > 0 ? round2((netMarginAmount / revenue) * 100) : 0
 
+    const isInsumo = row.item_kind === 'INSUMO'
+    const insumoQtyConsumed = Math.max(
+      num(row.qty_sold),
+      insumoConsumptions.reduce((sum, item) => sum + item.qty_consumed, 0),
+    )
+    const insumoTotalCost = round2(insumoQtyConsumed * num(row.unit_cost))
+
     return {
       ...row,
-      ...spec,
+      packaging_cost: unitPackaging,
       shipping_amount: shippingAmount,
       fees_amount: feesAmount,
       tax_amount: taxAmount,
@@ -200,6 +361,21 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
       extra_costs_amount: extraCostsAmount,
       net_margin_amount: netMarginAmount,
       net_margin_percent: netMarginPercent,
+      linked_packaging_name: pkgStat?.name ?? null,
+      linked_packaging_sku: pkgStat?.sku ?? null,
+      linked_packaging_unit_cost: linkedPkgUnitCost,
+      linked_packaging_stock: pkgStat ? num(pkgStat.stock_balance) : undefined,
+      packaging_qty_consumed: isInsumo
+        ? insumoQtyConsumed
+        : (prodConsumption?.qty_consumed ?? 0),
+      packaging_linked_cost_total: isInsumo
+        ? insumoTotalCost
+        : (prodConsumption?.total_cost ?? 0),
+      consumption_by_product: isInsumo
+        ? insumoConsumptions
+        : prodConsumption
+          ? [prodConsumption]
+          : [],
     }
   })
 }
@@ -222,10 +398,24 @@ export async function saveProductCatalogSpec(
   const grossGrams = spec.gross_weight_grams ?? intOrNull(prevData.gross_weight_grams)
   const netGrams = spec.net_weight_grams ?? intOrNull(prevData.net_weight_grams)
 
+  const linkedPkgId =
+    spec.linked_packaging_product_id !== undefined
+      ? spec.linked_packaging_product_id
+      : strOrNull(prevData.linked_packaging_product_id)
+
+  const linkedPkgQty =
+    spec.linked_packaging_qty !== undefined
+      ? spec.linked_packaging_qty
+      : intOrNull(prevData.linked_packaging_qty) ?? (linkedPkgId ? 1 : null)
+
   const mergedData: Record<string, unknown> = {
     ...prevData,
     productId,
-    sku,
+    sku: sku !== null ? sku : (prevData.sku ?? null),
+    item_kind:
+      spec.item_kind !== undefined ? spec.item_kind : (prevData.item_kind ?? 'PRODUTO'),
+    linked_packaging_product_id: linkedPkgId ?? null,
+    linked_packaging_qty: linkedPkgId ? (linkedPkgQty ?? 1) : null,
     asin: spec.asin !== undefined ? spec.asin : (prevData.asin ?? null),
     ean: spec.ean !== undefined ? spec.ean : (prevData.ean ?? null),
     gtin: spec.ean !== undefined ? spec.ean : (prevData.gtin ?? null),

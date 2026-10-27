@@ -21,7 +21,7 @@ import {
 // O alias mantem os call sites identicos -- o que muda e a garantia.
 import { createAuthedClient as createClient } from '@/lib/auth'
 import { calculateOrderProductCosts } from '@/lib/finance'
-import { num, parseAmount, round2 } from '@/lib/format'
+import { num, parseAmount, round2, todayISO } from '@/lib/format'
 import { loadProductCatalogSpecs } from '@/lib/product-catalog'
 import { ORDER_STATUSES } from '@/lib/types'
 
@@ -103,8 +103,12 @@ function readItems(formData: FormData): IncomingItem[] {
  * brinde -- o trigger `order_items_sync_stock` cria um stock_movement do tipo
  * VENDA para cada item, entao o estoque baixa sozinho e nunca fica divergente.
  *
- * Alem disso, se o frete/taxas do pedido nao foram digitados manualmente,
- * soma automaticamente o frete e as taxas configuradas nos produtos vendidos.
+ * Alem disso:
+ *   1. Soma automaticamente o frete, as taxas e o custo da sacola/embalagem
+ *      vinculada aos produtos vendidos;
+ *   2. Se o produto vendido tem uma sacola/embalagem vinculada (ex.: Sacola P,
+ *      Sacola M ou Sacola G), da baixa automatica dessa sacola em `stock_movements`
+ *      amarrada ao mesmo `order_id`.
  */
 export async function createOrder(_prev: ActionState, formData: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -115,15 +119,35 @@ export async function createOrder(_prev: ActionState, formData: FormData): Promi
       return actionError('Adicione pelo menos um produto ao pedido.')
     }
 
-    const specs = await loadProductCatalogSpecs()
+    const supabase = await createClient()
+    const [specs, productsRes] = await Promise.all([
+      loadProductCatalogSpecs(),
+      supabase.from('products').select('id,name,sku,unit_cost'),
+    ])
+
+    const productsById = new Map<string, { id: string; name: string; sku: string | null; unit_cost: number | string }>()
+    for (const p of (productsRes.data ?? []) as { id: string; name: string; sku: string | null; unit_cost: number | string }[]) {
+      productsById.set(p.id, p)
+    }
+
     const autoCosts = calculateOrderProductCosts(
       items.map((item) => {
         const spec = specs.get(item.product_id)
+        const linkedPkgId = spec?.linked_packaging_product_id
+        const linkedPkgProd = linkedPkgId ? productsById.get(linkedPkgId) : undefined
+        const linkedPkgQty = Math.max(1, num(spec?.linked_packaging_qty ?? 1))
+        const unitPackaging =
+          num(spec?.packaging_cost) > 0
+            ? num(spec?.packaging_cost)
+            : linkedPkgProd
+              ? round2(num(linkedPkgProd.unit_cost) * linkedPkgQty)
+              : 0
+
         return {
           quantity: item.quantity,
           unitPrice: item.unit_price,
           shippingPerUnit: num(spec?.shipping_cost),
-          packagingPerUnit: num(spec?.packaging_cost),
+          packagingPerUnit: unitPackaging,
           marketplacePercent: num(spec?.marketplace_percent),
           taxPercent: num(spec?.tax_percent),
         }
@@ -143,7 +167,6 @@ export async function createOrder(_prev: ActionState, formData: FormData): Promi
       header.tax_amount = autoCosts.taxAmount
     }
 
-    const supabase = await createClient()
     const { data: order, error } = await supabase
       .from('orders')
       .insert(header)
@@ -152,23 +175,53 @@ export async function createOrder(_prev: ActionState, formData: FormData): Promi
 
     if (error) return actionError(describeDbError(error))
 
-    const { error: itemsError } = await supabase.from('order_items').insert(
-      items.map((item) => ({
-        order_id: order.id,
-        product_id: item.product_id,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        unit_cost: item.unit_cost,
-        // Recalculados pelo trigger; enviados porque as colunas sao NOT NULL.
-        gross_total: item.quantity * item.unit_price,
-        cost_total: item.quantity * item.unit_cost,
-      })),
-    )
+    const { data: insertedItems, error: itemsError } = await supabase
+      .from('order_items')
+      .insert(
+        items.map((item) => ({
+          order_id: order.id,
+          product_id: item.product_id,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          unit_cost: item.unit_cost,
+          // Recalculados pelo trigger; enviados porque as colunas sao NOT NULL.
+          gross_total: item.quantity * item.unit_price,
+          cost_total: item.quantity * item.unit_cost,
+        })),
+      )
+      .select('id,product_id,quantity')
 
     if (itemsError) {
-      // Pedido sem item nenhum e lixo: desfaz para nao sujar o relatorio.
       await supabase.from('orders').delete().eq('id', order.id)
       return actionError(describeDbError(itemsError))
+    }
+
+    // Baixa automatica de sacolas / embalagens vinculadas aos produtos vendidos
+    const packagingMovements = (insertedItems ?? []).flatMap((inserted) => {
+      const spec = specs.get(inserted.product_id as string)
+      const pkgProductId = spec?.linked_packaging_product_id
+      if (!pkgProductId) return []
+
+      const parentProd = productsById.get(inserted.product_id as string)
+      const pkgQtyPerUnit = Math.max(1, num(spec?.linked_packaging_qty ?? 1))
+      const totalPkgQty = Math.max(1, Math.round(num(inserted.quantity) * pkgQtyPerUnit))
+
+      return [
+        {
+          product_id: pkgProductId,
+          type: 'VENDA' as const,
+          quantity: totalPkgQty,
+          movement_date: header.order_date || todayISO(),
+          order_id: order.id,
+          order_item_id: null,
+          reason: `Baixa automática de sacola/embalagem · ${parentProd?.name ?? 'Produto vendido'} (${inserted.quantity} un.)`,
+          notes: `PACKAGING_LINK|order_item_id:${inserted.id}|parent_product_id:${inserted.product_id}`,
+        },
+      ]
+    })
+
+    if (packagingMovements.length > 0) {
+      await supabase.from('stock_movements').insert(packagingMovements)
     }
 
     revalidateSales()
@@ -207,48 +260,82 @@ export async function addOrderItem(_prev: ActionState, formData: FormData): Prom
     const unitCost = readAmount(formData, 'unit_cost', 'Custo unitário', false)
 
     const supabase = await createClient()
-    const { error } = await supabase.from('order_items').insert({
-      order_id: orderId,
-      product_id: productId,
-      quantity,
-      unit_price: unitPrice,
-      unit_cost: unitCost,
-      gross_total: quantity * unitPrice,
-      cost_total: quantity * unitCost,
-    })
+    const { data: insertedItem, error } = await supabase
+      .from('order_items')
+      .insert({
+        order_id: orderId,
+        product_id: productId,
+        quantity,
+        unit_price: unitPrice,
+        unit_cost: unitCost,
+        gross_total: quantity * unitPrice,
+        cost_total: quantity * unitCost,
+      })
+      .select('id')
+      .single()
 
     if (error) return actionError(describeDbError(error))
 
-    // Soma automaticamente o frete e embalagem unitária do produto adicionado ao pedido.
-    const specs = await loadProductCatalogSpecs()
+    const [specs, currentOrderRes, productsRes] = await Promise.all([
+      loadProductCatalogSpecs(),
+      supabase
+        .from('orders')
+        .select('order_date,shipping_cost,packaging_cost')
+        .eq('id', orderId)
+        .maybeSingle(),
+      supabase.from('products').select('id,name,unit_cost'),
+    ])
+
+    const productsById = new Map<string, { id: string; name: string; unit_cost: number | string }>()
+    for (const p of (productsRes.data ?? []) as { id: string; name: string; unit_cost: number | string }[]) {
+      productsById.set(p.id, p)
+    }
+
     const spec = specs.get(productId)
+    const pkgProductId = spec?.linked_packaging_product_id
+    const pkgProd = pkgProductId ? productsById.get(pkgProductId) : undefined
+    const pkgQtyPerUnit = Math.max(1, num(spec?.linked_packaging_qty ?? 1))
+    const unitPackaging =
+      num(spec?.packaging_cost) > 0
+        ? num(spec?.packaging_cost)
+        : pkgProd
+          ? round2(num(pkgProd.unit_cost) * pkgQtyPerUnit)
+          : 0
+
+    if (pkgProductId && insertedItem?.id) {
+      const parentProd = productsById.get(productId)
+      const totalPkgQty = Math.max(1, Math.round(quantity * pkgQtyPerUnit))
+      await supabase.from('stock_movements').insert({
+        product_id: pkgProductId,
+        type: 'VENDA',
+        quantity: totalPkgQty,
+        movement_date: currentOrderRes.data?.order_date ?? todayISO(),
+        order_id: orderId,
+        order_item_id: null,
+        reason: `Baixa automática de sacola/embalagem · ${parentProd?.name ?? 'Produto vendido'} (${quantity} un.)`,
+        notes: `PACKAGING_LINK|order_item_id:${insertedItem.id}|parent_product_id:${productId}`,
+      })
+    }
+
     const itemCosts = calculateOrderProductCosts([
       {
         quantity,
         unitPrice,
         shippingPerUnit: num(spec?.shipping_cost),
-        packagingPerUnit: num(spec?.packaging_cost),
+        packagingPerUnit: unitPackaging,
         marketplacePercent: num(spec?.marketplace_percent),
         taxPercent: num(spec?.tax_percent),
       },
     ])
 
-    if (itemCosts.shippingCost > 0 || itemCosts.packagingCost > 0) {
-      const { data: currentOrder } = await supabase
+    if (currentOrderRes.data && (itemCosts.shippingCost > 0 || itemCosts.packagingCost > 0)) {
+      await supabase
         .from('orders')
-        .select('shipping_cost,packaging_cost')
+        .update({
+          shipping_cost: round2(num(currentOrderRes.data.shipping_cost) + itemCosts.shippingCost),
+          packaging_cost: round2(num(currentOrderRes.data.packaging_cost) + itemCosts.packagingCost),
+        })
         .eq('id', orderId)
-        .maybeSingle()
-
-      if (currentOrder) {
-        await supabase
-          .from('orders')
-          .update({
-            shipping_cost: round2(num(currentOrder.shipping_cost) + itemCosts.shippingCost),
-            packaging_cost: round2(num(currentOrder.packaging_cost) + itemCosts.packagingCost),
-          })
-          .eq('id', orderId)
-      }
     }
 
     revalidateSales()
@@ -256,12 +343,20 @@ export async function addOrderItem(_prev: ActionState, formData: FormData): Prom
   })
 }
 
-/** Remover o item remove junto a baixa de estoque (FK on delete cascade). */
+/**
+ * Remover o item remove junto a baixa de estoque do produto (FK on delete cascade)
+ * e tambem desfaz a baixa automatica da sacola/embalagem vinculada.
+ */
 export async function removeOrderItem(formData: FormData): Promise<void> {
   const id = readUuid(formData, 'id')
   if (!id) return
 
   const supabase = await createClient()
+  await supabase
+    .from('stock_movements')
+    .delete()
+    .like('notes', `PACKAGING_LINK|order_item_id:${id}|%`)
+
   await supabase.from('order_items').delete().eq('id', id)
 
   revalidateSales()
@@ -269,7 +364,8 @@ export async function removeOrderItem(formData: FormData): Promise<void> {
 
 /**
  * Cancelar nao apaga: o pedido continua na lista, mas sai de faturamento,
- * resultado e estoque (v_product_stats ignora movimento de pedido cancelado).
+ * resultado e estoque (v_product_stats ignora movimento de pedido cancelado,
+ * devolvendo tanto os produtos quanto as sacolas vinculadas ao saldo!).
  */
 export async function setOrderStatus(formData: FormData): Promise<void> {
   const id = readUuid(formData, 'id')

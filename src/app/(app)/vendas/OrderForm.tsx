@@ -386,6 +386,9 @@ export function OrderForm({
                       unitShip > 0
                         ? `Frete do item: ${formatCurrency(unitShip)} × ${qtyNum} = ${formatCurrency(unitShip * qtyNum)}`
                         : 'Frete unitário: R$ 0,00',
+                      selectedProd.linked_packaging_name
+                        ? `Baixa automática: −${qtyNum * Math.max(1, num(selectedProd.linked_packaging_qty ?? 1))}x ${selectedProd.linked_packaging_name} (${formatCurrency(num(selectedProd.packaging_cost) * qtyNum)})`
+                        : null,
                     ]
                       .filter(Boolean)
                       .join(' · ')}

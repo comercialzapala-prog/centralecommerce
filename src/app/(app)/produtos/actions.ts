@@ -18,8 +18,9 @@ import {
 // Client COM autorizacao: valida sessao + vinculo antes de devolver a conexao.
 // O alias mantem os call sites identicos -- o que muda e a garantia.
 import { createAuthedClient as createClient } from '@/lib/auth'
+import { todayISO } from '@/lib/format'
 import { saveProductCatalogSpec } from '@/lib/product-catalog'
-import type { ProductCatalogSpec } from '@/lib/types'
+import type { ProductCatalogSpec, ProductItemKind } from '@/lib/types'
 
 function revalidateProducts() {
   revalidatePath('/produtos', 'layout')
@@ -46,7 +47,19 @@ function readOptionalInt(formData: FormData, key: string, label: string): number
 }
 
 function readCatalogSpec(formData: FormData): ProductCatalogSpec {
+  const rawKind = readText(formData, 'item_kind')
+  const itemKind: ProductItemKind = rawKind === 'INSUMO' ? 'INSUMO' : 'PRODUTO'
+  const linkedPkgId = readUuid(formData, 'linked_packaging_product_id')
+  const linkedPkgQty = readOptionalInt(
+    formData,
+    'linked_packaging_qty',
+    'Qtd. de sacolas por unidade',
+  )
+
   return {
+    item_kind: itemKind,
+    linked_packaging_product_id: itemKind === 'INSUMO' ? null : linkedPkgId,
+    linked_packaging_qty: itemKind === 'INSUMO' || !linkedPkgId ? null : Math.max(1, linkedPkgQty ?? 1),
     asin: readText(formData, 'asin'),
     ean: readText(formData, 'ean'),
     ncm: readText(formData, 'ncm'),
@@ -70,6 +83,11 @@ export async function createProduct(_prev: ActionState, formData: FormData): Pro
     const supabase = await createClient()
     const base = readProduct(formData)
     const spec = readCatalogSpec(formData)
+    const initialStock = readOptionalInt(formData, 'initial_stock', 'Estoque inicial') ?? 0
+
+    if (spec.item_kind === 'INSUMO' && !base.category) {
+      base.category = 'Embalagens e Sacolas'
+    }
 
     const { data, error } = await supabase
       .from('products')
@@ -81,8 +99,25 @@ export async function createProduct(_prev: ActionState, formData: FormData): Pro
 
     await saveProductCatalogSpec(data.id as string, data.sku as string | null, spec)
 
+    if (initialStock > 0) {
+      await supabase.from('stock_movements').insert({
+        product_id: data.id,
+        type: 'ENTRADA',
+        quantity: initialStock,
+        movement_date: todayISO(),
+        reason:
+          spec.item_kind === 'INSUMO'
+            ? 'Estoque inicial de sacola / embalagem'
+            : 'Estoque inicial no cadastro do produto',
+      })
+    }
+
     revalidateProducts()
-    return actionOk('Produto cadastrado.')
+    return actionOk(
+      spec.item_kind === 'INSUMO'
+        ? `Sacola / insumo "${base.name}" cadastrado.`
+        : 'Produto cadastrado.',
+    )
   })
 }
 
@@ -103,6 +138,38 @@ export async function updateProduct(_prev: ActionState, formData: FormData): Pro
 
     revalidateProducts()
     return actionOk('Produto atualizado.')
+  })
+}
+
+/**
+ * Vincula ou troca rapidamente qual sacola/embalagem um produto consome a cada venda.
+ */
+export async function linkProductPackaging(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  return runAction(async () => {
+    const productId = readUuid(formData, 'product_id')
+    if (!productId) return actionError('Escolha o produto que usará a sacola.')
+
+    const packagingProductId = readUuid(formData, 'linked_packaging_product_id')
+    if (packagingProductId && packagingProductId === productId) {
+      return actionError('Um produto não pode ser vinculado a ele mesmo.')
+    }
+
+    const qty = readOptionalInt(formData, 'linked_packaging_qty', 'Quantidade por venda') ?? 1
+
+    await saveProductCatalogSpec(productId, null, {
+      linked_packaging_product_id: packagingProductId,
+      linked_packaging_qty: packagingProductId ? Math.max(1, qty) : null,
+    })
+
+    revalidateProducts()
+    return actionOk(
+      packagingProductId
+        ? 'Vínculo de sacola/embalagem salvo. As próximas vendas já darão baixa automática!'
+        : 'Vínculo de sacola removido do produto.',
+    )
   })
 }
 

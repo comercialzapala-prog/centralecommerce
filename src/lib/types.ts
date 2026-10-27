@@ -186,7 +186,26 @@ export type Investment = {
   updated_at: string | null
 }
 
+export type ProductItemKind = 'PRODUTO' | 'INSUMO'
+
+export type PackagingConsumptionByProduct = {
+  product_id: string
+  product_name: string
+  product_sku: string | null
+  packaging_product_id: string
+  packaging_name: string
+  packaging_sku: string | null
+  qty_per_unit: number
+  units_sold: number
+  qty_consumed: number
+  unit_cost: number
+  total_cost: number
+}
+
 export type ProductCatalogSpec = {
+  item_kind?: ProductItemKind | null
+  linked_packaging_product_id?: string | null
+  linked_packaging_qty?: number | null
   asin?: string | null
   ean?: string | null
   ncm?: string | null
@@ -222,9 +241,12 @@ export type Product = {
   active: boolean
   created_at: string
   updated_at: string | null
+  linked_packaging_name?: string | null
+  linked_packaging_sku?: string | null
+  linked_packaging_unit_cost?: number
 } & ProductCatalogSpec
 
-/** Linha da view `v_product_stats` enriquecida com ficha técnica e frete/taxas acumulados. */
+/** Linha da view `v_product_stats` enriquecida com ficha técnica, sacolas vinculadas e frete/taxas acumulados. */
 export type ProductStats = {
   product_id: string
   sku: string | null
@@ -252,6 +274,13 @@ export type ProductStats = {
   extra_costs_amount?: number | string
   net_margin_amount?: number | string
   net_margin_percent?: number | string
+  linked_packaging_name?: string | null
+  linked_packaging_sku?: string | null
+  linked_packaging_unit_cost?: number
+  linked_packaging_stock?: number
+  packaging_qty_consumed?: number
+  packaging_linked_cost_total?: number
+  consumption_by_product?: PackagingConsumptionByProduct[]
 } & ProductCatalogSpec
 
 /** Linha da view `v_order_result`. */
