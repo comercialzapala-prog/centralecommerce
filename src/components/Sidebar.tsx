@@ -62,7 +62,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Gestão',
     items: [
       { href: '/categorias', label: 'Categorias', icon: Tags },
-      { href: '/configuracoes/integracoes/bling', label: 'Integrações', icon: PlugZap },
+      { href: '/configuracoes/integracoes/olist', label: 'Integrações', icon: PlugZap },
       { href: '/configuracoes', label: 'Configurações', icon: SettingsIcon },
     ],
   },

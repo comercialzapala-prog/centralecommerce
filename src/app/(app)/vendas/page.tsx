@@ -66,7 +66,15 @@ export default async function SalesPage({
         title="Vendas"
         description="Faturamento, CMV e resultado de cada pedido."
         actions={
-          <OrderForm channels={channels} products={products} suggestedNumber={nextNumber} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/configuracoes/integracoes/olist"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-card px-3 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted"
+            >
+              Sincronizar Olist ERP
+            </Link>
+            <OrderForm channels={channels} products={products} suggestedNumber={nextNumber} />
+          </div>
         }
       />
 

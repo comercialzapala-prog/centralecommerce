@@ -13,6 +13,7 @@ import {
 import { BoxGrid } from '@/components/BoxGrid'
 import { MetricCard, type MetricTone } from '@/components/MetricCard'
 import { PageHeader } from '@/components/PageHeader'
+import { RouteTabs } from '@/components/RouteTabs'
 import { Badge } from '@/components/ui/badge'
 import {
   Table,
@@ -91,6 +92,13 @@ export default async function BlingIntegrationPage() {
             {STATUS_LABEL[status] ?? status}
           </Badge>
         }
+      />
+
+      <RouteTabs
+        items={[
+          { href: '/configuracoes/integracoes/olist', label: 'Olist ERP (Tiny)' },
+          { href: '/configuracoes/integracoes/bling', label: 'Bling ERP' },
+        ]}
       />
 
       {degraded ? (
