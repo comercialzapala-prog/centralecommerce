@@ -447,6 +447,7 @@ export async function syncOlistOrders(options?: {
 
 export async function syncOlistProducts(options?: {
   maxItems?: number
+  maxPages?: number
   syncStock?: boolean
 }): Promise<OlistSyncProductsResult> {
   try {
@@ -458,29 +459,43 @@ export async function syncOlistProducts(options?: {
         updated: 0,
         stockAdjusted: 0,
         message: 'Token do Olist ERP não configurado.',
-        error: 'Configure o Token da API do Olist ERP antes de sincronizar produtos.',
+        error: 'Configure o Token da API do Olist ERP em Integrações antes de puxar o catálogo.',
       }
     }
 
-    const maxItems = Math.min(Math.max(options?.maxItems ?? 30, 1), 100)
+    const maxPages = Math.min(Math.max(options?.maxPages ?? 10, 1), 25)
+    const maxItems = Math.min(Math.max(options?.maxItems ?? 500, 1), 1000)
     const syncStock = options?.syncStock ?? true
 
-    const searchRes = await searchOlistProducts({ pagina: 1 })
-    const items = searchRes.products.slice(0, maxItems)
+    const allSummaries: Awaited<ReturnType<typeof searchOlistProducts>>['products'] = []
+    let currentPage = 1
+    let totalPages = 1
+
+    do {
+      const pageRes = await searchOlistProducts({ pagina: currentPage })
+      allSummaries.push(...pageRes.products)
+      totalPages = Math.min(pageRes.totalPages, maxPages)
+      currentPage += 1
+    } while (currentPage <= totalPages && allSummaries.length < maxItems)
+
+    const items = allSummaries.slice(0, maxItems)
 
     const admin = createAdminClient()
     const [existingProductsRes, specsMap] = await Promise.all([
-      admin.from('v_product_stats').select('id, sku, name, current_stock'),
+      admin.from('v_product_stats').select('product_id, sku, name, stock_balance'),
       loadProductCatalogSpecs(),
     ])
 
     const bySku = new Map<string, { id: string; current_stock: number }>()
+    const byName = new Map<string, { id: string; current_stock: number }>()
     for (const p of existingProductsRes.data ?? []) {
+      const pid = String(p.product_id)
+      const stock = Number(p.stock_balance ?? 0)
       if (p.sku) {
-        bySku.set(String(p.sku).trim().toLowerCase(), {
-          id: p.id,
-          current_stock: Number(p.current_stock ?? 0),
-        })
+        bySku.set(String(p.sku).trim().toLowerCase(), { id: pid, current_stock: stock })
+      }
+      if (p.name) {
+        byName.set(String(p.name).trim().toLowerCase(), { id: pid, current_stock: stock })
       }
     }
 
@@ -489,9 +504,18 @@ export async function syncOlistProducts(options?: {
     let stockAdjusted = 0
     const todayIso = new Date().toISOString().slice(0, 10)
 
+    const toGrams = (val: unknown): number | null => {
+      const n = Number(val ?? 0)
+      if (!Number.isFinite(n) || n <= 0) return null
+      // No Olist/Tiny o peso costuma vir em kg (ex: 0.610), mas se já vier > 50 assumimos gramas
+      return n <= 50 ? Math.round(n * 1000) : Math.round(n)
+    }
+
     for (const summary of items) {
       const sku = (summary.codigo || `OLIST-${summary.id}`).trim()
-      const existing = bySku.get(sku.toLowerCase())
+      const nameSummary = (summary.nome || sku).trim()
+      const existing =
+        bySku.get(sku.toLowerCase()) ?? byName.get(nameSummary.toLowerCase())
 
       // Não sobrescrever insumos / sacolas internas da Central
       if (existing && specsMap.get(existing.id)?.item_kind === 'INSUMO') {
@@ -506,18 +530,24 @@ export async function syncOlistProducts(options?: {
       }
 
       const salePrice = Number(detail?.preco ?? summary.preco ?? 0)
-      const unitCost = Number(detail?.preco_custo ?? summary.preco_custo ?? 0)
+      const unitCost = Number(
+        detail?.preco_custo || detail?.preco_custo_medio || summary.preco_custo || 0,
+      )
       const name = (detail?.nome || summary.nome || sku).trim()
-      const category = detail?.categoria?.trim() || 'Catálogo Olist'
+      const category = detail?.categoria?.trim() || detail?.marca?.trim() || 'Catálogo Olist'
+      const isActive = (detail?.situacao ?? summary.situacao ?? 'A') !== 'I'
 
       let productId = existing?.id
       if (productId) {
         await admin
           .from('products')
           .update({
+            sku,
             name,
+            category,
             ...(unitCost > 0 ? { unit_cost: unitCost } : {}),
             ...(salePrice > 0 ? { sale_price: salePrice } : {}),
+            active: isActive,
             updated_at: new Date().toISOString(),
           })
           .eq('id', productId)
@@ -531,30 +561,32 @@ export async function syncOlistProducts(options?: {
             category,
             unit_cost: unitCost,
             sale_price: salePrice,
-            active: true,
+            active: isActive,
           })
           .select('id')
           .single()
 
         if (inserted?.id) {
           productId = inserted.id
+          bySku.set(sku.toLowerCase(), { id: productId, current_stock: 0 })
           created += 1
         }
       }
 
       if (productId) {
         const currentSpec = specsMap.get(productId)
+        const netGrams = toGrams(detail?.peso_liquido) ?? currentSpec?.net_weight_grams ?? null
+        const grossGrams = toGrams(detail?.peso_bruto) ?? currentSpec?.gross_weight_grams ?? null
+
         await saveProductCatalogSpec(productId, sku, {
           ...currentSpec,
           item_kind: 'PRODUTO',
           ean: detail?.gtin || summary.gtin || currentSpec?.ean || null,
           ncm: detail?.ncm || currentSpec?.ncm || null,
-          net_weight_grams: detail?.peso_liquido
-            ? Math.round(Number(detail.peso_liquido) * 1000)
-            : (currentSpec?.net_weight_grams ?? 0),
-          gross_weight_grams: detail?.peso_bruto
-            ? Math.round(Number(detail.peso_bruto) * 1000)
-            : (currentSpec?.gross_weight_grams ?? 0),
+          net_weight_grams: netGrams,
+          gross_weight_grams: grossGrams,
+          description:
+            detail?.descricao_complementar || detail?.obs || currentSpec?.description || null,
         })
 
         if (syncStock) {
@@ -562,11 +594,11 @@ export async function syncOlistProducts(options?: {
             const olistBalance = Math.round(await getOlistProductStock(summary.id))
             const currentStock = existing?.current_stock ?? 0
             const delta = olistBalance - currentStock
-            if (delta !== 0 && (!existing || currentStock === 0)) {
+            if (delta !== 0) {
               await admin.from('stock_movements').insert({
                 product_id: productId,
-                type: delta > 0 ? 'ENTRADA' : 'AJUSTE',
-                quantity: delta > 0 ? delta : delta,
+                type: currentStock === 0 && delta > 0 ? 'ENTRADA' : 'AJUSTE',
+                quantity: delta,
                 movement_date: todayIso,
                 reason: 'Saldo sincronizado do Olist ERP',
                 notes: `OLIST_STOCK_SYNC|external_id:${summary.id}`,

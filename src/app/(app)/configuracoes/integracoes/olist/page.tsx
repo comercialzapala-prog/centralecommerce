@@ -46,7 +46,7 @@ export default async function OlistIntegrationPage() {
 
   const [olistOrdersRes, olistEventsRes] = await Promise.all([
     admin
-      .from('v_order_financials')
+      .from('v_order_result')
       .select('id, order_number, order_date, channel_name, customer_name, total_amount, packaging_cost, status')
       .ilike('order_number', 'OLIST-%')
       .order('order_date', { ascending: false })

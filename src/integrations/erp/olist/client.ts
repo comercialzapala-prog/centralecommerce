@@ -110,12 +110,16 @@ export type OlistProductDetail = {
   unidade?: string
   preco: number
   preco_custo: number
+  preco_custo_medio?: number
   peso_liquido?: number
   peso_bruto?: number
   gtin?: string
   ncm?: string
   marca?: string
   categoria?: string
+  garantia?: string
+  descricao_complementar?: string
+  obs?: string
   situacao?: string
 }
 

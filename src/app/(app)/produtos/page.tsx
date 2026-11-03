@@ -18,6 +18,7 @@ import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { setProductActive } from './actions'
+import { OlistPullButton } from './OlistPullButton'
 import { PackagingLinkDialog } from './PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from './ProductForm'
 
@@ -81,6 +82,7 @@ export default async function ProductsPage() {
         description="Acompanhe estoque, ficha técnica, CMV, frete, sacola vinculada e margem líquida por SKU."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <OlistPullButton />
             <PackagingLinkDialog
               products={linkableProducts}
               packagingOptions={packagingOptions}

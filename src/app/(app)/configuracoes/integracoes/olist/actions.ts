@@ -98,7 +98,7 @@ export async function syncOlistProductsNowAction(
   syncStock = true,
 ): Promise<ActionResult<OlistSyncProductsResult>> {
   try {
-    const res = await syncOlistProducts({ maxItems: 40, syncStock })
+    const res = await syncOlistProducts({ maxPages: 10, maxItems: 500, syncStock })
     if (!res.ok) {
       return fail(res.error ?? res.message)
     }
