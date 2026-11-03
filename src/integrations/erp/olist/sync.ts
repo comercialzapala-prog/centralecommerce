@@ -567,8 +567,9 @@ export async function syncOlistProducts(options?: {
           .single()
 
         if (inserted?.id) {
-          productId = inserted.id
-          bySku.set(sku.toLowerCase(), { id: productId, current_stock: 0 })
+          const newId = String(inserted.id)
+          productId = newId
+          bySku.set(sku.toLowerCase(), { id: newId, current_stock: 0 })
           created += 1
         }
       }
