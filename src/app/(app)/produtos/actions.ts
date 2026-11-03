@@ -32,12 +32,58 @@ function revalidateProducts() {
 }
 
 function readProduct(formData: FormData) {
+  const rawKind = readText(formData, 'item_kind')
+  const isInsumo = rawKind === 'INSUMO'
+
   return {
     name: readRequiredText(formData, 'name', 'Nome'),
     sku: readText(formData, 'sku'),
-    category: readText(formData, 'category'),
+    category: readText(formData, 'category') ?? (isInsumo ? 'Embalagens e Sacolas' : null),
     unit_cost: readAmount(formData, 'unit_cost', 'Custo unitário', false),
-    sale_price: readAmount(formData, 'sale_price', 'Preço de venda', false),
+    sale_price: isInsumo ? 0 : readAmount(formData, 'sale_price', 'Preço de venda', false),
+  }
+}
+
+async function syncBagLinkedProducts(bagId: string, formData: FormData) {
+  const hasPicker = readText(formData, 'has_linked_products_picker') === 'true'
+  if (!hasPicker) return
+
+  const rawSelected = formData
+    .getAll('linked_product_ids')
+    .map((v) => String(v).trim())
+    .filter(Boolean)
+  const selectedSet = new Set(rawSelected)
+
+  const rawPreviouslyLinked = formData
+    .getAll('previously_linked_product_ids')
+    .map((v) => String(v).trim())
+    .filter(Boolean)
+
+  const tasks: Promise<void>[] = []
+
+  for (const prodId of selectedSet) {
+    if (prodId === bagId) continue
+    tasks.push(
+      saveProductCatalogSpec(prodId, null, {
+        linked_packaging_product_id: bagId,
+        linked_packaging_qty: 1,
+      }),
+    )
+  }
+
+  for (const prevProdId of rawPreviouslyLinked) {
+    if (!selectedSet.has(prevProdId)) {
+      tasks.push(
+        saveProductCatalogSpec(prevProdId, null, {
+          linked_packaging_product_id: null,
+          linked_packaging_qty: null,
+        }),
+      )
+    }
+  }
+
+  if (tasks.length > 0) {
+    await Promise.all(tasks)
   }
 }
 
@@ -100,6 +146,10 @@ export async function createProduct(_prev: ActionState, formData: FormData): Pro
 
     await saveProductCatalogSpec(data.id as string, data.sku as string | null, spec)
 
+    if (spec.item_kind === 'INSUMO') {
+      await syncBagLinkedProducts(data.id as string, formData)
+    }
+
     if (initialStock > 0) {
       await supabase.from('stock_movements').insert({
         product_id: data.id,
@@ -137,8 +187,14 @@ export async function updateProduct(_prev: ActionState, formData: FormData): Pro
 
     await saveProductCatalogSpec(id, base.sku, spec)
 
+    if (spec.item_kind === 'INSUMO') {
+      await syncBagLinkedProducts(id, formData)
+    }
+
     revalidateProducts()
-    return actionOk('Produto atualizado.')
+    return actionOk(
+      spec.item_kind === 'INSUMO' ? 'Sacola / embalagem atualizada.' : 'Produto atualizado.',
+    )
   })
 }
 

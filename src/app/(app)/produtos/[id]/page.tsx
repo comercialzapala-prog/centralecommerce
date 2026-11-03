@@ -59,7 +59,12 @@ export default async function ProductDetailPage({
       id: p.product_id,
       name: p.name,
       sku: p.sku,
+      sale_price: p.sale_price,
+      unit_cost: p.unit_cost,
+      gross_weight_grams: p.gross_weight_grams,
+      shipping_cost: p.shipping_cost,
       linked_packaging_product_id: p.linked_packaging_product_id,
+      linked_packaging_name: p.linked_packaging_name,
       linked_packaging_qty: p.linked_packaging_qty,
     }))
 
@@ -119,7 +124,11 @@ export default async function ProductDetailPage({
               }
             />
             <StockMovementForm products={products} defaultProductId={id} />
-            <ProductForm product={product} packagingOptions={packagingOptions} />
+            <ProductForm
+              product={product}
+              packagingOptions={packagingOptions}
+              linkableProducts={linkableProducts}
+            />
           </div>
         }
       />

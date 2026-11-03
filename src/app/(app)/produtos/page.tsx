@@ -41,7 +41,12 @@ export default async function ProductsPage() {
     id: prod.product_id,
     name: prod.name,
     sku: prod.sku,
+    sale_price: prod.sale_price,
+    unit_cost: prod.unit_cost,
+    gross_weight_grams: prod.gross_weight_grams,
+    shipping_cost: prod.shipping_cost,
     linked_packaging_product_id: prod.linked_packaging_product_id,
+    linked_packaging_name: prod.linked_packaging_name,
     linked_packaging_qty: prod.linked_packaging_qty,
   }))
 
@@ -80,7 +85,10 @@ export default async function ProductsPage() {
               products={linkableProducts}
               packagingOptions={packagingOptions}
             />
-            <ProductForm packagingOptions={packagingOptions} />
+            <ProductForm
+              packagingOptions={packagingOptions}
+              linkableProducts={linkableProducts}
+            />
           </div>
         }
       />

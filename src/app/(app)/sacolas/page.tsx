@@ -41,7 +41,12 @@ export default async function SacolasPage() {
     id: prod.product_id,
     name: prod.name,
     sku: prod.sku,
+    sale_price: prod.sale_price,
+    unit_cost: prod.unit_cost,
+    gross_weight_grams: prod.gross_weight_grams,
+    shipping_cost: prod.shipping_cost,
     linked_packaging_product_id: prod.linked_packaging_product_id,
+    linked_packaging_name: prod.linked_packaging_name,
     linked_packaging_qty: prod.linked_packaging_qty,
   }))
 
@@ -75,6 +80,7 @@ export default async function SacolasPage() {
             <ProductForm
               defaultItemKind="INSUMO"
               packagingOptions={packagingOptions}
+              linkableProducts={linkableProducts}
               triggerLabel="Nova sacola / embalagem"
             />
           </div>
@@ -142,6 +148,7 @@ export default async function SacolasPage() {
               <ProductForm
                 defaultItemKind="INSUMO"
                 packagingOptions={packagingOptions}
+                linkableProducts={linkableProducts}
                 triggerLabel="Cadastrar primeira sacola"
               />
             }
@@ -185,7 +192,11 @@ export default async function SacolasPage() {
                           products={allProductsList}
                           defaultProductId={bag.product_id}
                         />
-                        <ProductForm product={bag} packagingOptions={packagingOptions} />
+                        <ProductForm
+                          product={bag}
+                          packagingOptions={packagingOptions}
+                          linkableProducts={linkableProducts}
+                        />
                       </div>
                     </div>
 
