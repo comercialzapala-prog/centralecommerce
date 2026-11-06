@@ -19,9 +19,11 @@ import { deleteStockMovement } from '@/app/(app)/movimentacoes/actions'
 import { EMPTY_FILTERS } from '@/lib/filters'
 import { getProductById, getProducts, getProductStats, getStockMovements } from '@/lib/data'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
+import { calculateProductPricing } from '@/lib/pricing'
 
 import { PackagingLinkDialog } from '../PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from '../ProductForm'
+import { ProductPricingDialog } from '../ProductPricingDialog'
 
 export const dynamic = 'force-dynamic'
 
@@ -84,6 +86,18 @@ export default async function ProductDetailPage({
   const netMarginPercent = num(product.net_margin_percent ?? product.margin_percent)
 
   const consumptions = product.consumption_by_product ?? []
+  const pricing = calculateProductPricing({
+    unitCost: num(product.unit_cost),
+    shippingCost: unitShipping,
+    packagingCost: unitPackaging,
+    laborCost: num(product.labor_cost),
+    lossPercent: num(product.loss_percent ?? 5),
+    targetMarginPercent: num(product.target_margin_percent ?? 30) || 30,
+    marketplacePercent: mktPct,
+    taxPercent: taxPct,
+    currentSalePrice: num(product.sale_price),
+    stockBalance: stock,
+  })
 
   return (
     <>
@@ -111,6 +125,7 @@ export default async function ProductDetailPage({
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {!isInsumo && <ProductPricingDialog product={product} triggerVariant="button" />}
             <PackagingLinkDialog
               products={linkableProducts}
               packagingOptions={packagingOptions}
@@ -344,6 +359,17 @@ export default async function ProductDetailPage({
                 label: 'Comissão / Imposto (%)',
                 value: `${formatPercent(mktPct)} / ${formatPercent(taxPct)}`,
                 hint: 'Percentuais sobre a venda',
+              },
+              {
+                label: `Margem Pretendida (${pricing.targetMarginPercent}%)`,
+                value: `Vender por ${formatCurrency(pricing.suggestedPrice)}`,
+                hint: `Custo c/ perda (${pricing.lossPercent}%): ${formatCurrency(pricing.adjustedCost)} · Sobra: ${formatCurrency(pricing.grossProfit)}/un.`,
+                tone: 'positive',
+              },
+              {
+                label: 'Hora de Trabalho / Operação',
+                value: formatCurrency(pricing.laborCost),
+                hint: `Custo base total: ${formatCurrency(pricing.totalBaseCost)}`,
               },
             ]}
           />

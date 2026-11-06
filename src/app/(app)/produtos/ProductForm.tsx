@@ -550,6 +550,46 @@ export function ProductForm({
                   defaultValue={product?.tax_percent !== undefined ? String(num(product.tax_percent)) : ''}
                 />
               </Field>
+
+              <Field
+                label="Hora de trabalho / Mão de obra (R$)"
+                htmlFor="prod-labor"
+                hint="Custo operacional por un."
+              >
+                <MoneyInput
+                  id="prod-labor"
+                  name="labor_cost"
+                  defaultValue={product?.labor_cost !== undefined ? String(num(product.labor_cost)) : ''}
+                />
+              </Field>
+
+              <Field
+                label="Perda variável / quebra (%)"
+                htmlFor="prod-loss-pct"
+                hint="Ex.: 5 para 5% (divide por 0,95)"
+              >
+                <MoneyInput
+                  id="prod-loss-pct"
+                  name="loss_percent"
+                  defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '5'}
+                />
+              </Field>
+
+              <Field
+                label="Margem pretendida (%)"
+                htmlFor="prod-target-margin"
+                hint="Ex.: 30 para 30% (divide por 0,70)"
+              >
+                <MoneyInput
+                  id="prod-target-margin"
+                  name="target_margin_percent"
+                  defaultValue={
+                    product?.target_margin_percent !== undefined
+                      ? String(num(product.target_margin_percent))
+                      : '30'
+                  }
+                />
+              </Field>
             </div>
           </div>
 

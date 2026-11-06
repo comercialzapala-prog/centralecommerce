@@ -15,12 +15,14 @@ import {
 } from '@/components/ui/table'
 import { getProductStats } from '@/lib/data'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
+import { calculateProductPricing } from '@/lib/pricing'
 import { cn } from '@/lib/utils'
 
 import { setProductActive } from './actions'
 import { OlistPullButton } from './OlistPullButton'
 import { PackagingLinkDialog } from './PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from './ProductForm'
+import { ProductPricingDialog } from './ProductPricingDialog'
 
 export const dynamic = 'force-dynamic'
 
@@ -156,12 +158,13 @@ export default async function ProductsPage() {
                 <TableHead className="text-right">Estoque</TableHead>
                 <TableHead className="text-right">Vendidos</TableHead>
                 <TableHead className="text-right">Custo</TableHead>
-                <TableHead className="text-right">Preço</TableHead>
+                <TableHead className="text-right">Preço Atual</TableHead>
+                <TableHead className="text-right">Meta &amp; Preço Sugerido</TableHead>
                 <TableHead className="text-right">Frete Unit.</TableHead>
                 <TableHead className="text-right">Receita</TableHead>
                 <TableHead className="text-right">Frete + Sacolas</TableHead>
                 <TableHead className="text-right">Margem Líq.</TableHead>
-                <TableHead className="w-[84px]" />
+                <TableHead className="w-[140px]" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -172,6 +175,18 @@ export default async function ProductsPage() {
                 const shippingUnit = num(product.shipping_cost)
                 const shippingTotal = num(product.shipping_amount)
                 const packagingTotal = num(product.packaging_amount)
+                const pricing = calculateProductPricing({
+                  unitCost: num(product.unit_cost),
+                  shippingCost: shippingUnit,
+                  packagingCost: num(product.packaging_cost),
+                  laborCost: num(product.labor_cost),
+                  lossPercent: num(product.loss_percent ?? 5),
+                  targetMarginPercent: num(product.target_margin_percent ?? 30) || 30,
+                  marketplacePercent: num(product.marketplace_percent),
+                  taxPercent: num(product.tax_percent),
+                  currentSalePrice: num(product.sale_price),
+                  stockBalance: stock,
+                })
 
                 return (
                   <TableRow
@@ -231,10 +246,23 @@ export default async function ProductsPage() {
                       {formatNumber(product.qty_sold)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatCurrency(product.unit_cost)}
+                      <div>{formatCurrency(product.unit_cost)}</div>
+                      {pricing.totalBaseCost > pricing.unitCost && (
+                        <div className="text-[10px]" title="Custo base somado (Produto + Frete + Sacola + Trab.)">
+                          Total: {formatCurrency(pricing.totalBaseCost)}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {formatCurrency(product.sale_price)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <div className="font-semibold text-foreground">
+                        {formatCurrency(pricing.suggestedPrice)}
+                      </div>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                        Meta {pricing.targetMarginPercent}% · Sobra {formatCurrency(pricing.grossProfit)}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {shippingUnit > 0 ? formatCurrency(shippingUnit) : '--'}
@@ -265,6 +293,7 @@ export default async function ProductsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <ProductPricingDialog product={product} />
                         <ProductForm product={product} packagingOptions={packagingOptions} />
                         <ConfirmActionButton
                           action={setProductActive}

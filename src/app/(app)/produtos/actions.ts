@@ -115,6 +115,14 @@ function readCatalogSpec(formData: FormData): ProductCatalogSpec {
     gross_weight_grams: readOptionalInt(formData, 'gross_weight_grams', 'Peso com embalagem (g)'),
     shipping_cost: readAmount(formData, 'shipping_cost', 'Frete unitário padrão', false),
     packaging_cost: readAmount(formData, 'packaging_cost', 'Embalagem unitária', false),
+    labor_cost: readAmount(formData, 'labor_cost', 'Hora de trabalho / mão de obra (R$)', false),
+    loss_percent: readAmount(formData, 'loss_percent', 'Perda variável (%)', false),
+    target_margin_percent: readAmount(
+      formData,
+      'target_margin_percent',
+      'Margem pretendida (%)',
+      false,
+    ),
     marketplace_percent: readAmount(formData, 'marketplace_percent', 'Comissão padrão (%)', false),
     tax_percent: readAmount(formData, 'tax_percent', 'Imposto NF (%)', false),
     voltage: readText(formData, 'voltage'),
@@ -242,4 +250,61 @@ export async function setProductActive(formData: FormData): Promise<void> {
   await supabase.from('products').update({ active: readBoolean(formData, 'active') }).eq('id', id)
 
   revalidateProducts()
+}
+
+export async function saveProductPricingAction(input: {
+  productId: string
+  unitCost: number
+  shippingCost: number
+  packagingCost: number
+  laborCost: number
+  lossPercent: number
+  targetMarginPercent: number
+  marketplacePercent: number
+  taxPercent: number
+  applySalePrice?: number | null
+}): Promise<{ ok: boolean; message: string }> {
+  try {
+    const supabase = await createClient()
+    const updateData: Record<string, unknown> = {
+      unit_cost: Math.max(0, Number(input.unitCost) || 0),
+      updated_at: new Date().toISOString(),
+    }
+    if (input.applySalePrice !== undefined && input.applySalePrice !== null && input.applySalePrice > 0) {
+      updateData.sale_price = Number(input.applySalePrice.toFixed(2))
+    }
+
+    const { error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', input.productId)
+
+    if (error) {
+      return { ok: false, message: describeDbError(error) }
+    }
+
+    await saveProductCatalogSpec(input.productId, null, {
+      shipping_cost: Math.max(0, Number(input.shippingCost) || 0),
+      packaging_cost: Math.max(0, Number(input.packagingCost) || 0),
+      labor_cost: Math.max(0, Number(input.laborCost) || 0),
+      loss_percent: Math.max(0, Number(input.lossPercent) || 0),
+      target_margin_percent: Math.max(0, Number(input.targetMarginPercent) || 30),
+      marketplace_percent: Math.max(0, Number(input.marketplacePercent) || 0),
+      tax_percent: Math.max(0, Number(input.taxPercent) || 0),
+    })
+
+    revalidateProducts()
+    return {
+      ok: true,
+      message:
+        input.applySalePrice && input.applySalePrice > 0
+          ? 'Margem pretendida, custos e novo Preço de Venda aplicados ao produto!'
+          : 'Margem pretendida e parâmetros de custo salvos com sucesso!',
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Erro ao salvar precificação do produto.',
+    }
+  }
 }

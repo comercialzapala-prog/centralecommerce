@@ -68,6 +68,12 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
     gross_weight_grams: grossGrams,
     shipping_cost: num(raw.shipping_cost ?? raw.shippingCost),
     packaging_cost: num(raw.packaging_cost ?? raw.packagingCost),
+    labor_cost: num(raw.labor_cost ?? raw.laborCost),
+    loss_percent: num(raw.loss_percent ?? raw.lossPercent),
+    target_margin_percent:
+      raw.target_margin_percent !== undefined || raw.targetMarginPercent !== undefined
+        ? num(raw.target_margin_percent ?? raw.targetMarginPercent)
+        : 30,
     marketplace_percent: num(raw.marketplace_percent ?? raw.marketplacePercent),
     tax_percent: num(raw.tax_percent ?? raw.taxPercent),
     voltage: strOrNull(raw.voltage),
@@ -437,6 +443,14 @@ export async function saveProductCatalogSpec(
         : null,
     shipping_cost: spec.shipping_cost !== undefined ? num(spec.shipping_cost) : num(prevData.shipping_cost),
     packaging_cost: spec.packaging_cost !== undefined ? num(spec.packaging_cost) : num(prevData.packaging_cost),
+    labor_cost: spec.labor_cost !== undefined ? num(spec.labor_cost) : num(prevData.labor_cost),
+    loss_percent: spec.loss_percent !== undefined ? num(spec.loss_percent) : num(prevData.loss_percent),
+    target_margin_percent:
+      spec.target_margin_percent !== undefined
+        ? num(spec.target_margin_percent)
+        : prevData.target_margin_percent !== undefined
+          ? num(prevData.target_margin_percent)
+          : 30,
     marketplace_percent:
       spec.marketplace_percent !== undefined ? num(spec.marketplace_percent) : num(prevData.marketplace_percent),
     tax_percent: spec.tax_percent !== undefined ? num(spec.tax_percent) : num(prevData.tax_percent),

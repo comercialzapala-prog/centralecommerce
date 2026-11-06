@@ -214,6 +214,9 @@ export type ProductCatalogSpec = {
   gross_weight_grams?: number | null
   shipping_cost?: number | string
   packaging_cost?: number | string
+  labor_cost?: number | string
+  loss_percent?: number | string
+  target_margin_percent?: number | string
   marketplace_percent?: number | string
   tax_percent?: number | string
   voltage?: string | null
