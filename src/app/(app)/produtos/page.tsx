@@ -180,7 +180,7 @@ export default async function ProductsPage() {
                   shippingCost: shippingUnit,
                   packagingCost: num(product.packaging_cost),
                   laborCost: num(product.labor_cost),
-                  lossPercent: num(product.loss_percent ?? 5),
+                  lossPercent: num(product.loss_percent ?? 0),
                   targetMarginPercent: num(product.target_margin_percent ?? 30) || 30,
                   marketplacePercent: num(product.marketplace_percent),
                   taxPercent: num(product.tax_percent),

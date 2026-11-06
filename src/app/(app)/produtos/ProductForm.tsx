@@ -566,12 +566,12 @@ export function ProductForm({
               <Field
                 label="Perda variável / quebra (%)"
                 htmlFor="prod-loss-pct"
-                hint="Ex.: 5 para 5% (divide por 0,95)"
+                hint="Se não tiver perda, deixe 0"
               >
                 <MoneyInput
                   id="prod-loss-pct"
                   name="loss_percent"
-                  defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '5'}
+                  defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '0'}
                 />
               </Field>
 

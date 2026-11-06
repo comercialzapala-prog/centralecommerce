@@ -33,7 +33,7 @@ export function ProductPricingDialog({
   const [shippingCost, setShippingCost] = useState(() => num(product.shipping_cost))
   const [packagingCost, setPackagingCost] = useState(() => num(product.packaging_cost))
   const [laborCost, setLaborCost] = useState(() => num(product.labor_cost))
-  const [lossPercent, setLossPercent] = useState(() => num(product.loss_percent ?? 5))
+  const [lossPercent, setLossPercent] = useState(() => num(product.loss_percent ?? 0))
   const [targetMarginPercent, setTargetMarginPercent] = useState(() =>
     num(product.target_margin_percent ?? 30) > 0 ? num(product.target_margin_percent ?? 30) : 30,
   )
@@ -41,6 +41,14 @@ export function ProductPricingDialog({
     num(product.marketplace_percent),
   )
   const [taxPercent, setTaxPercent] = useState(() => num(product.tax_percent))
+
+  const totalLostOrDamaged = num(product.qty_lost) + num(product.qty_damaged)
+  const totalBaseVolume = Math.max(
+    num(product.qty_in),
+    num(product.qty_sold) + totalLostOrDamaged,
+  )
+  const measuredLossPercent =
+    totalBaseVolume > 0 ? Number(((totalLostOrDamaged / totalBaseVolume) * 100).toFixed(2)) : 0
 
   const pricing = useMemo(
     () =>
@@ -166,12 +174,13 @@ export function ProductPricingDialog({
                   <Input
                     id="sim-margin"
                     type="number"
-                    min={1}
-                    max={90}
-                    step={0.5}
+                    min={0}
+                    max={95}
+                    step="any"
+                    placeholder="Ex.: 30"
                     value={targetMarginPercent}
                     onChange={(e) => setTargetMarginPercent(Number(e.target.value))}
-                    className="h-9 w-24 font-mono text-sm font-bold"
+                    className="h-9 w-28 font-mono text-sm font-bold"
                   />
                   <div className="flex flex-wrap gap-1">
                     {MARGIN_PRESETS.map((pct) => (
@@ -191,6 +200,9 @@ export function ProductPricingDialog({
                     ))}
                   </div>
                 </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Digite qualquer valor no campo acima (ex.: 27,5%, 30%, 42%) ou use um atalho.
+                </p>
               </div>
 
               <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2.5">
@@ -208,11 +220,12 @@ export function ProductPricingDialog({
                     id="sim-loss"
                     type="number"
                     min={0}
-                    max={80}
-                    step={0.5}
+                    max={90}
+                    step="any"
+                    placeholder="0%"
                     value={lossPercent}
                     onChange={(e) => setLossPercent(Number(e.target.value))}
-                    className="h-9 w-24 font-mono text-sm font-bold"
+                    className="h-9 w-28 font-mono text-sm font-bold"
                   />
                   <div className="flex flex-wrap gap-1">
                     {LOSS_PRESETS.map((pct) => (
@@ -231,6 +244,21 @@ export function ProductPricingDialog({
                       </button>
                     ))}
                   </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                  <span>
+                    Perda medida no estoque: <strong>{formatNumber(totalLostOrDamaged)} un.</strong>{' '}
+                    ({measuredLossPercent}%)
+                  </span>
+                  {measuredLossPercent > 0 && lossPercent !== measuredLossPercent && (
+                    <button
+                      type="button"
+                      onClick={() => setLossPercent(measuredLossPercent)}
+                      className="font-semibold text-amber-700 underline hover:no-underline dark:text-amber-300"
+                    >
+                      Usar média medida ({measuredLossPercent}%)
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

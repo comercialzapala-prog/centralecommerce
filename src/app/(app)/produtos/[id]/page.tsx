@@ -91,7 +91,7 @@ export default async function ProductDetailPage({
     shippingCost: unitShipping,
     packagingCost: unitPackaging,
     laborCost: num(product.labor_cost),
-    lossPercent: num(product.loss_percent ?? 5),
+    lossPercent: num(product.loss_percent ?? 0),
     targetMarginPercent: num(product.target_margin_percent ?? 30) || 30,
     marketplacePercent: mktPct,
     taxPercent: taxPct,
