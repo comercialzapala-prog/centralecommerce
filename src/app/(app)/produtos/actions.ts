@@ -308,3 +308,55 @@ export async function saveProductPricingAction(input: {
     }
   }
 }
+
+export async function registerWeightedBatchEntryAction(input: {
+  productId: string
+  entryQuantity: number
+  entryUnitCost: number
+  newWeightedUnitCost: number
+}): Promise<{ ok: boolean; message: string }> {
+  try {
+    const qty = Math.round(Number(input.entryQuantity) || 0)
+    if (qty <= 0) {
+      return { ok: false, message: 'Informe uma quantidade de entrada maior que zero.' }
+    }
+
+    const supabase = await createClient()
+    const weightedCost = Number(Math.max(0, Number(input.newWeightedUnitCost) || 0).toFixed(2))
+
+    const { error: prodError } = await supabase
+      .from('products')
+      .update({
+        unit_cost: weightedCost,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', input.productId)
+
+    if (prodError) {
+      return { ok: false, message: describeDbError(prodError) }
+    }
+
+    const { error: movError } = await supabase.from('stock_movements').insert({
+      product_id: input.productId,
+      type: 'ENTRADA',
+      quantity: qty,
+      movement_date: todayISO(),
+      reason: `Entrada c/ Custo Médio Ponderado (Lote a R$ ${Number(input.entryUnitCost).toFixed(2)} -> Novo CMV R$ ${weightedCost.toFixed(2)})`,
+    })
+
+    if (movError) {
+      return { ok: false, message: describeDbError(movError) }
+    }
+
+    revalidateProducts()
+    return {
+      ok: true,
+      message: `Entrada de +${qty} un. registrada e Custo Médio atualizado para R$ ${weightedCost.toFixed(2)}!`,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Erro ao registrar entrada com custo médio.',
+    }
+  }
+}

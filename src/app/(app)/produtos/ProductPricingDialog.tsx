@@ -12,7 +12,7 @@ import { calculateProductPricing } from '@/lib/pricing'
 import type { ProductStats } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-import { saveProductPricingAction } from './actions'
+import { registerWeightedBatchEntryAction, saveProductPricingAction } from './actions'
 
 const MARGIN_PRESETS = [25, 30, 35, 40, 45, 50, 60]
 const LOSS_PRESETS = [0, 3, 5, 10, 15]
@@ -41,6 +41,17 @@ export function ProductPricingDialog({
     num(product.marketplace_percent),
   )
   const [taxPercent, setTaxPercent] = useState(() => num(product.tax_percent))
+  const [residualQty, setResidualQty] = useState(() => Math.max(0, num(product.stock_balance)))
+  const [newEntryQty, setNewEntryQty] = useState<number>(0)
+  const [newEntryCost, setNewEntryCost] = useState<number>(0)
+
+  const residualTotalValue = residualQty * unitCost
+  const newEntryTotalValue = Math.max(0, newEntryQty) * Math.max(0, newEntryCost)
+  const combinedStockQty = residualQty + Math.max(0, newEntryQty)
+  const combinedStockValue = residualTotalValue + newEntryTotalValue
+  const weightedAverageCost =
+    combinedStockQty > 0 ? Number((combinedStockValue / combinedStockQty).toFixed(2)) : unitCost
+  const weightedDiff = Number((weightedAverageCost - unitCost).toFixed(2))
 
   const totalLostOrDamaged = num(product.qty_lost) + num(product.qty_damaged)
   const totalBaseVolume = Math.max(
@@ -97,6 +108,25 @@ export function ProductPricingDialog({
       })
       setFeedback({ ok: res.ok, text: res.message })
       if (res.ok) {
+        router.refresh()
+      }
+    })
+  }
+
+  function handleRegisterWeightedEntry() {
+    setFeedback(null)
+    startTransition(async () => {
+      const res = await registerWeightedBatchEntryAction({
+        productId: product.product_id,
+        entryQuantity: newEntryQty,
+        entryUnitCost: newEntryCost,
+        newWeightedUnitCost: weightedAverageCost,
+      })
+      setFeedback({ ok: res.ok, text: res.message })
+      if (res.ok) {
+        setUnitCost(weightedAverageCost)
+        setResidualQty(combinedStockQty)
+        setNewEntryQty(0)
         router.refresh()
       }
     })
@@ -341,6 +371,127 @@ export function ProductPricingDialog({
                     onChange={(e) => setTaxPercent(Number(e.target.value))}
                     className="h-8 font-mono text-xs"
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* 2.B Estoque Residual + Nova Entrada (Custo Médio Ponderado do Mês) */}
+            <div className="rounded-xl border border-purple-500/30 bg-purple-500/5 p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-purple-900 dark:text-purple-200">
+                    Cálculo de Estoque Residual + Nova Entrada (Custo Médio Ponderado / VM)
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Ex.: Sobrou 50 pçs a R$ 5,00 (R$ 250) + Entrou 100 pçs a R$ 10,00 (R$ 1.000) =
+                    R$ 1.250 ÷ 150 pçs = <strong>R$ 8,33/un.</strong>
+                  </p>
+                </div>
+                {newEntryQty > 0 && (
+                  <span
+                    className={cn(
+                      'rounded-md px-2 py-0.5 text-[11px] font-bold',
+                      weightedDiff > 0
+                        ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300'
+                        : weightedDiff < 0
+                          ? 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-300'
+                          : 'bg-muted text-muted-foreground',
+                    )}
+                  >
+                    {weightedDiff > 0
+                      ? `Média SUBIU (+${formatCurrency(weightedDiff)}/un.)`
+                      : weightedDiff < 0
+                        ? `Média CAIU (${formatCurrency(weightedDiff)}/un.)`
+                        : 'Média MANTEVE igual'}
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Estoque Residual (Un.)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={residualQty}
+                    onChange={(e) => setResidualQty(Math.max(0, Number(e.target.value)))}
+                    className="h-8 font-mono text-xs"
+                  />
+                  <div className="text-[10px] text-muted-foreground">
+                    Valor: {formatCurrency(residualTotalValue)}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Nova Entrada (Un.)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="Ex.: 100"
+                    value={newEntryQty || ''}
+                    onChange={(e) => setNewEntryQty(Math.max(0, Number(e.target.value)))}
+                    className="h-8 font-mono text-xs"
+                  />
+                  <div className="text-[10px] text-muted-foreground">
+                    Novo saldo: {formatNumber(combinedStockQty)} un.
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Novo Custo Compra (R$)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Ex.: 10,00"
+                    value={newEntryCost || ''}
+                    onChange={(e) => setNewEntryCost(Math.max(0, Number(e.target.value)))}
+                    className="h-8 font-mono text-xs"
+                  />
+                  <div className="text-[10px] text-muted-foreground">
+                    Lote: {formatCurrency(newEntryTotalValue)}
+                  </div>
+                </div>
+
+                <div className="space-y-1 rounded-lg border bg-background/80 p-2">
+                  <div className="text-[10px] text-muted-foreground">Valor Total Somado</div>
+                  <div className="font-mono text-xs font-bold">
+                    {formatCurrency(combinedStockValue)}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    ÷ {formatNumber(combinedStockQty)} peças
+                  </div>
+                </div>
+
+                <div className="space-y-1 rounded-lg border border-purple-500/40 bg-background p-2">
+                  <div className="text-[10px] font-semibold text-purple-700 dark:text-purple-300">
+                    Novo Custo Médio (CMV)
+                  </div>
+                  <div className="font-mono text-sm font-extrabold">
+                    {formatCurrency(weightedAverageCost)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUnitCost(weightedAverageCost)}
+                    className="text-[10px] font-semibold text-primary underline hover:no-underline"
+                  >
+                    Simular com esta média
+                  </button>
+                </div>
+
+                <div className="flex flex-col justify-center gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={pending || newEntryQty <= 0}
+                    onClick={handleRegisterWeightedEntry}
+                    className="h-auto py-1.5 text-[11px] whitespace-normal leading-tight"
+                  >
+                    Lançar Entrada (+{formatNumber(newEntryQty)}) e Salvar Média
+                  </Button>
                 </div>
               </div>
             </div>
