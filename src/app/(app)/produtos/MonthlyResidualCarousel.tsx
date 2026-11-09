@@ -82,7 +82,7 @@ export function MonthlyResidualCarousel({
   }
 
   function handleLoadUserExample() {
-    // Carrega exatamente o exemplo pedido: Jan (100 pçs a R$ 5 = 500, vende 50, sobra 50 = 250) -> Fev (+100 pçs a R$ 10 = 1000 -> 1250 / 150 = R$ 8,33)
+    // Carrega o fluxo completo no próprio mês: Inicia com 100 pçs a R$ 5 = 500 -> Sai/Vende 50 -> Sobra 50 Residual = 250 -> Entra +100 a R$ 10 = 1000 -> Total 1250 / 150 = R$ 8,33
     setEntries((prev) =>
       prev.map((item, idx) => {
         if (idx === 0) {
@@ -90,26 +90,26 @@ export function MonthlyResidualCarousel({
             ...item,
             initialOverrideQty: 100,
             initialOverrideCost: 5,
-            entryQty: 0,
-            entryUnitCost: 0,
             soldQty: 50,
             salePrice: 12,
+            entryQty: 100,
+            entryUnitCost: 10,
           }
         }
         if (idx === 1) {
           return {
             ...item,
-            entryQty: 100,
-            entryUnitCost: 10,
-            soldQty: 50,
+            soldQty: 60,
             salePrice: 16,
+            entryQty: 0,
+            entryUnitCost: 0,
           }
         }
         return item
       }),
     )
     setPinnedIndex(0)
-    setActiveIndex(1)
+    setActiveIndex(0)
   }
 
   function handleSaveTrack(applyActiveToProduct = false) {
@@ -401,11 +401,85 @@ export function MonthlyResidualCarousel({
               </div>
             </div>
 
-            {/* Passo 1 + Passo 2: Estoque Residual + Nova Entrada */}
+            {/* Passo 1: Saídas / Vendas do Mês e Sobra Residual */}
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="font-semibold text-rose-800 dark:text-rose-300">
+                  1. Estoque que Iniciou ({formatNumber(activeCard.residualQty + activeCard.soldQty)}{' '}
+                  pçs a {formatCurrency(activeCard.residualUnitCost)}) &amp; Saídas / Vendas de{' '}
+                  {activeCard.label}
+                </span>
+                <span className="font-mono text-[11px]">
+                  Valor Inicial:{' '}
+                  <strong>
+                    {formatCurrency(
+                      (activeCard.residualQty + activeCard.soldQty) * activeCard.residualUnitCost,
+                    )}
+                  </strong>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
+                <div>
+                  <Label className="text-[10px]">(-) Saídas / Vendas (Peças)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={entries[activeCard.index]?.soldQty ?? 0}
+                    onChange={(e) =>
+                      updateEntry(activeCard.index, {
+                        soldQty: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="mt-0.5 h-7 font-mono text-xs"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">Preço Vendido (R$)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={entries[activeCard.index]?.salePrice ?? activeCard.suggestedSalePrice}
+                    onChange={(e) =>
+                      updateEntry(activeCard.index, {
+                        salePrice: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="mt-0.5 h-7 font-mono text-xs"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">CMV das Saídas</Label>
+                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-semibold text-rose-700 dark:text-rose-300">
+                    {formatCurrency(activeCard.cmvSold)}
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">Lucro das Vendas</Label>
+                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(activeCard.grossProfit)}
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">(=) Sobrou Residual</Label>
+                  <div className="mt-0.5 flex h-7 items-center justify-between rounded-md border border-amber-500/40 bg-amber-500/10 px-2 font-mono text-xs font-bold text-amber-800 dark:text-amber-300">
+                    <span>{formatNumber(activeCard.residualQty)} pçs</span>
+                    <span>{formatCurrency(activeCard.residualValue)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Passo 2 + Passo 3: Estoque Residual que Sobrou + Nova Entrada = Novo Custo Médio */}
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
               <div className="rounded-lg border bg-amber-500/5 p-2.5">
                 <div className="text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
-                  1. Estoque Residual (Sobrou)
+                  2. Estoque Residual (Sobrou)
                 </div>
                 <div className="mt-1 font-mono text-sm font-bold">
                   {formatNumber(activeCard.residualQty)} pçs
@@ -418,7 +492,7 @@ export function MonthlyResidualCarousel({
 
               <div className="rounded-lg border bg-sky-500/5 p-2.5 space-y-1.5">
                 <div className="text-[10px] font-semibold uppercase text-sky-700 dark:text-sky-300">
-                  2. Nova Entrada em {activeCard.label}
+                  3. (+) Nova Entrada em {activeCard.label}
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <div>
@@ -458,7 +532,7 @@ export function MonthlyResidualCarousel({
 
               <div className="rounded-lg border-2 border-purple-500/40 bg-purple-500/10 p-2.5">
                 <div className="text-[10px] font-semibold uppercase text-purple-800 dark:text-purple-200">
-                  3. Novo Custo Médio (VM)
+                  4. (=) Novo Custo Médio (VM)
                 </div>
                 <div className="mt-1 font-mono text-base font-extrabold text-foreground">
                   {formatCurrency(activeCard.newWeightedCost)} / pç
@@ -473,74 +547,6 @@ export function MonthlyResidualCarousel({
                     {formatCurrency(diffVsPinned)}/pç
                   </div>
                 )}
-              </div>
-            </div>
-
-            {/* Passo 4: Rastreio das Vendas do Mês Vigente e Sobra p/ o Próximo */}
-            <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="font-semibold">
-                  4. Rastreio de Vendas em {activeCard.label} e Sobra de Estoque
-                </span>
-                <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
-                  Preço sugerido p/ margem de {targetMarginPercent}%:{' '}
-                  <strong>{formatCurrency(activeCard.suggestedSalePrice)}</strong>
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
-                <div>
-                  <Label className="text-[10px]">Qtd Vendida ({activeCard.label})</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={entries[activeCard.index]?.soldQty ?? 0}
-                    onChange={(e) =>
-                      updateEntry(activeCard.index, {
-                        soldQty: Math.max(0, Number(e.target.value)),
-                      })
-                    }
-                    className="mt-0.5 h-7 font-mono text-xs"
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">Preço Vendido (R$)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={entries[activeCard.index]?.salePrice ?? activeCard.suggestedSalePrice}
-                    onChange={(e) =>
-                      updateEntry(activeCard.index, {
-                        salePrice: Math.max(0, Number(e.target.value)),
-                      })
-                    }
-                    className="mt-0.5 h-7 font-mono text-xs"
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">CMV das Vendas</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-semibold text-amber-700 dark:text-amber-300">
-                    {formatCurrency(activeCard.cmvSold)}
-                  </div>
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">Lucro Bruto Mês</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(activeCard.grossProfit)}
-                  </div>
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">Sobrou p/ Próx. Mês</Label>
-                  <div className="mt-0.5 flex h-7 items-center justify-between rounded-md border border-purple-500/40 bg-purple-500/10 px-2 font-mono text-xs font-bold">
-                    <span>{formatNumber(activeCard.closingResidualQty)} pçs</span>
-                    <ArrowRight className="size-3 text-purple-600" />
-                  </div>
-                </div>
               </div>
             </div>
           </div>

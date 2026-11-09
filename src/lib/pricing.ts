@@ -272,18 +272,27 @@ export function computeMonthlyCarouselChain(
   let prevWeightedCost = 0
 
   entries.forEach((entry, index) => {
-    const residualQty =
+    // 1. Estoque que iniciou o mês (vindo do fechamento do mês anterior, ou base inicial no 1º mês)
+    const startQty =
       index === 0 && entry.initialOverrideQty !== null && entry.initialOverrideQty !== undefined
         ? Math.max(0, Math.round(num(entry.initialOverrideQty)))
         : prevClosingQty
 
-    const residualUnitCost =
+    const startUnitCost =
       index === 0 && entry.initialOverrideCost !== null && entry.initialOverrideCost !== undefined
         ? Math.max(0, round2(num(entry.initialOverrideCost)))
         : prevWeightedCost
 
+    // 2. Saídas / Vendas do mês (descontadas do estoque inicial para achar quanto sobrou de Residual)
+    const soldQty = Math.max(0, Math.round(num(entry.soldQty)))
+    const cmvSold = round2(soldQty * startUnitCost)
+
+    // 3. Estoque Residual que sobrou após as vendas do mês
+    const residualQty = Math.max(0, startQty - soldQty)
+    const residualUnitCost = startUnitCost
     const residualValue = round2(residualQty * residualUnitCost)
 
+    // 4. Nova Entrada no mês + Novo Custo Médio Ponderado (Residual + Entrada)
     const entryQty = Math.max(0, Math.round(num(entry.entryQty)))
     const entryUnitCost = Math.max(0, round2(num(entry.entryUnitCost)))
     const entryValue = round2(entryQty * entryUnitCost)
@@ -309,14 +318,13 @@ export function computeMonthlyCarouselChain(
         ? round2(adjustedWithLoss / (1 - marginPct / 100))
         : adjustedWithLoss
 
-    const soldQty = Math.max(0, Math.round(num(entry.soldQty)))
     const salePrice = Math.max(0, round2(num(entry.salePrice) || suggestedSalePrice))
     const revenue = round2(soldQty * salePrice)
-    const cmvSold = round2(soldQty * newWeightedCost)
     const grossProfit = round2(revenue - cmvSold)
 
-    const closingResidualQty = Math.max(0, availableQty - soldQty)
-    const closingResidualValue = round2(closingResidualQty * newWeightedCost)
+    // O Novo Saldo Total (Residual + Nova Entrada) e o Novo Custo Médio passam para iniciar o próximo mês
+    const closingResidualQty = availableQty
+    const closingResidualValue = availableValue
 
     prevClosingQty = closingResidualQty
     prevWeightedCost = newWeightedCost
