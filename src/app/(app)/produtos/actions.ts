@@ -20,7 +20,7 @@ import {
 import { createAuthedClient as createClient } from '@/lib/auth'
 import { todayISO } from '@/lib/format'
 import { saveProductCatalogSpec } from '@/lib/product-catalog'
-import type { ProductCatalogSpec, ProductItemKind } from '@/lib/types'
+import type { MonthlyCmvTrackEntry, ProductCatalogSpec, ProductItemKind } from '@/lib/types'
 
 function revalidateProducts() {
   revalidatePath('/produtos', 'layout')
@@ -357,6 +357,54 @@ export async function registerWeightedBatchEntryAction(input: {
     return {
       ok: false,
       message: err instanceof Error ? err.message : 'Erro ao registrar entrada com custo médio.',
+    }
+  }
+}
+
+export async function saveProductMonthlyCmvTrackAction(input: {
+  productId: string
+  monthlyTrack: MonthlyCmvTrackEntry[]
+  applyUnitCost?: number | null
+  applySalePrice?: number | null
+}): Promise<{ ok: boolean; message: string }> {
+  try {
+    const supabase = await createClient()
+
+    if (
+      (input.applyUnitCost !== undefined && input.applyUnitCost !== null && input.applyUnitCost > 0) ||
+      (input.applySalePrice !== undefined && input.applySalePrice !== null && input.applySalePrice > 0)
+    ) {
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      }
+      if (input.applyUnitCost && input.applyUnitCost > 0) {
+        patch.unit_cost = Number(input.applyUnitCost.toFixed(2))
+      }
+      if (input.applySalePrice && input.applySalePrice > 0) {
+        patch.sale_price = Number(input.applySalePrice.toFixed(2))
+      }
+      const { error } = await supabase.from('products').update(patch).eq('id', input.productId)
+      if (error) {
+        return { ok: false, message: describeDbError(error) }
+      }
+    }
+
+    await saveProductCatalogSpec(input.productId, null, {
+      monthly_cmv_track: input.monthlyTrack,
+    })
+
+    revalidateProducts()
+    return {
+      ok: true,
+      message:
+        input.applyUnitCost || input.applySalePrice
+          ? 'Carrossel mensal salvo e Custo Médio / Preço aplicados ao produto!'
+          : 'Rastreio mensal de CMV e Estoque Residual salvo com sucesso!',
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Erro ao salvar carrossel mensal.',
     }
   }
 }

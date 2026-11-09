@@ -89,6 +89,9 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
     differentials: strOrNull(raw.differentials),
     care_instructions: strOrNull(raw.care_instructions ?? raw.careInstructions),
     related_eans: strOrNull(raw.related_eans ?? raw.relatedEans),
+    monthly_cmv_track: Array.isArray(raw.monthly_cmv_track)
+      ? (raw.monthly_cmv_track as ProductCatalogSpec['monthly_cmv_track'])
+      : undefined,
   }
 }
 
@@ -473,6 +476,10 @@ export async function saveProductCatalogSpec(
     care_instructions:
       spec.care_instructions !== undefined ? spec.care_instructions : (prevData.care_instructions ?? null),
     related_eans: spec.related_eans !== undefined ? spec.related_eans : (prevData.related_eans ?? null),
+    monthly_cmv_track:
+      spec.monthly_cmv_track !== undefined
+        ? spec.monthly_cmv_track
+        : (prevData.monthly_cmv_track ?? null),
     updatedAt: new Date().toISOString(),
   }
 

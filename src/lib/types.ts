@@ -202,6 +202,17 @@ export type PackagingConsumptionByProduct = {
   total_cost: number
 }
 
+export type MonthlyCmvTrackEntry = {
+  monthKey: string
+  label: string
+  initialOverrideQty?: number | null
+  initialOverrideCost?: number | null
+  entryQty: number
+  entryUnitCost: number
+  soldQty: number
+  salePrice: number
+}
+
 export type ProductCatalogSpec = {
   item_kind?: ProductItemKind | null
   linked_packaging_product_id?: string | null
@@ -219,6 +230,7 @@ export type ProductCatalogSpec = {
   target_margin_percent?: number | string
   marketplace_percent?: number | string
   tax_percent?: number | string
+  monthly_cmv_track?: MonthlyCmvTrackEntry[] | null
   voltage?: string | null
   capacity?: string | null
   material_primary?: string | null

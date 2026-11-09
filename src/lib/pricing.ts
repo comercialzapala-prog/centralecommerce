@@ -1,4 +1,5 @@
 import { num, round2 } from '@/lib/format'
+import type { MonthlyCmvTrackEntry } from '@/lib/types'
 
 export type PricingInputs = {
   unitCost: number
@@ -180,4 +181,172 @@ export function calculateProductPricing(input: PricingInputs): PricingBreakdown 
     potentialStockProfit,
     scenarios,
   }
+}
+
+export type ComputedMonthCard = {
+  index: number
+  monthKey: string
+  label: string
+  residualQty: number
+  residualUnitCost: number
+  residualValue: number
+  entryQty: number
+  entryUnitCost: number
+  entryValue: number
+  availableQty: number
+  availableValue: number
+  newWeightedCost: number
+  costDelta: number
+  costDeltaPercent: number
+  averageStatus: 'HIGHER' | 'LOWER' | 'SAME'
+  suggestedSalePrice: number
+  soldQty: number
+  salePrice: number
+  revenue: number
+  cmvSold: number
+  grossProfit: number
+  closingResidualQty: number
+  closingResidualValue: number
+}
+
+const MONTH_LABELS = [
+  { key: '2026-01', label: 'Janeiro' },
+  { key: '2026-02', label: 'Fevereiro' },
+  { key: '2026-03', label: 'Março' },
+  { key: '2026-04', label: 'Abril' },
+  { key: '2026-05', label: 'Maio' },
+  { key: '2026-06', label: 'Junho' },
+  { key: '2026-07', label: 'Julho' },
+  { key: '2026-08', label: 'Agosto' },
+  { key: '2026-09', label: 'Setembro' },
+  { key: '2026-10', label: 'Outubro' },
+  { key: '2026-11', label: 'Novembro' },
+  { key: '2026-12', label: 'Dezembro' },
+]
+
+export function buildDefaultMonthlyTrack(params: {
+  initialStock: number
+  unitCost: number
+  salePrice: number
+  existingTrack?: MonthlyCmvTrackEntry[] | null
+}): MonthlyCmvTrackEntry[] {
+  if (params.existingTrack && params.existingTrack.length === 12) {
+    return params.existingTrack
+  }
+
+  const baseCost = params.unitCost > 0 ? round2(params.unitCost) : 5
+  const basePrice = params.salePrice > 0 ? round2(params.salePrice) : round2(baseCost / 0.7)
+  const initStock = params.initialStock > 0 ? Math.round(params.initialStock) : 100
+
+  return MONTH_LABELS.map((m, idx) => ({
+    monthKey: m.key,
+    label: m.label,
+    initialOverrideQty: idx === 0 ? initStock : null,
+    initialOverrideCost: idx === 0 ? baseCost : null,
+    entryQty: idx === 1 ? 100 : 0,
+    entryUnitCost: idx === 1 ? round2(baseCost * 2) : baseCost,
+    soldQty: idx === 0 ? Math.min(50, Math.round(initStock / 2)) : 0,
+    salePrice: basePrice,
+  }))
+}
+
+export function computeMonthlyCarouselChain(
+  entries: MonthlyCmvTrackEntry[],
+  options?: {
+    extraUnitCosts?: number
+    lossPercent?: number
+    targetMarginPercent?: number
+  },
+): ComputedMonthCard[] {
+  const extraCosts = Math.max(0, num(options?.extraUnitCosts))
+  const lossPct = clampPercent(num(options?.lossPercent), 90)
+  const marginPct = clampPercent(
+    options?.targetMarginPercent && options.targetMarginPercent > 0
+      ? num(options.targetMarginPercent)
+      : 30,
+    90,
+  )
+
+  const cards: ComputedMonthCard[] = []
+  let prevClosingQty = 0
+  let prevWeightedCost = 0
+
+  entries.forEach((entry, index) => {
+    const residualQty =
+      index === 0 && entry.initialOverrideQty !== null && entry.initialOverrideQty !== undefined
+        ? Math.max(0, Math.round(num(entry.initialOverrideQty)))
+        : prevClosingQty
+
+    const residualUnitCost =
+      index === 0 && entry.initialOverrideCost !== null && entry.initialOverrideCost !== undefined
+        ? Math.max(0, round2(num(entry.initialOverrideCost)))
+        : prevWeightedCost
+
+    const residualValue = round2(residualQty * residualUnitCost)
+
+    const entryQty = Math.max(0, Math.round(num(entry.entryQty)))
+    const entryUnitCost = Math.max(0, round2(num(entry.entryUnitCost)))
+    const entryValue = round2(entryQty * entryUnitCost)
+
+    const availableQty = residualQty + entryQty
+    const availableValue = round2(residualValue + entryValue)
+
+    const newWeightedCost =
+      availableQty > 0 ? round2(availableValue / availableQty) : residualUnitCost
+
+    const costDelta = round2(newWeightedCost - residualUnitCost)
+    const costDeltaPercent =
+      residualUnitCost > 0 ? round2((costDelta / residualUnitCost) * 100) : 0
+
+    const averageStatus: 'HIGHER' | 'LOWER' | 'SAME' =
+      costDelta > 0.009 ? 'HIGHER' : costDelta < -0.009 ? 'LOWER' : 'SAME'
+
+    const basePlusExtras = round2(newWeightedCost + extraCosts)
+    const adjustedWithLoss =
+      lossPct > 0 && lossPct < 95 ? round2(basePlusExtras / (1 - lossPct / 100)) : basePlusExtras
+    const suggestedSalePrice =
+      marginPct > 0 && marginPct < 95
+        ? round2(adjustedWithLoss / (1 - marginPct / 100))
+        : adjustedWithLoss
+
+    const soldQty = Math.max(0, Math.round(num(entry.soldQty)))
+    const salePrice = Math.max(0, round2(num(entry.salePrice) || suggestedSalePrice))
+    const revenue = round2(soldQty * salePrice)
+    const cmvSold = round2(soldQty * newWeightedCost)
+    const grossProfit = round2(revenue - cmvSold)
+
+    const closingResidualQty = Math.max(0, availableQty - soldQty)
+    const closingResidualValue = round2(closingResidualQty * newWeightedCost)
+
+    prevClosingQty = closingResidualQty
+    prevWeightedCost = newWeightedCost
+
+    cards.push({
+      index,
+      monthKey: entry.monthKey,
+      label: entry.label,
+      residualQty,
+      residualUnitCost,
+      residualValue,
+      entryQty,
+      entryUnitCost,
+      entryValue,
+      availableQty,
+      availableValue,
+      newWeightedCost,
+      costDelta,
+      costDeltaPercent,
+      averageStatus,
+      suggestedSalePrice,
+      soldQty,
+      salePrice,
+      revenue,
+      cmvSold,
+      grossProfit,
+      closingResidualQty,
+      closingResidualValue,
+    })
+  })
+
+  return cards
 }

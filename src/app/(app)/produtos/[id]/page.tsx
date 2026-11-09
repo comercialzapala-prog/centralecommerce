@@ -21,6 +21,7 @@ import { getProductById, getProducts, getProductStats, getStockMovements } from 
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
 import { calculateProductPricing } from '@/lib/pricing'
 
+import { MonthlyResidualCarousel } from '../MonthlyResidualCarousel'
 import { PackagingLinkDialog } from '../PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from '../ProductForm'
 import { ProductPricingDialog } from '../ProductPricingDialog'
@@ -386,6 +387,13 @@ export default async function ProductDetailPage({
               ) : null}
             </div>
           ) : null}
+
+          <MonthlyResidualCarousel
+            product={product}
+            extraUnitCosts={unitShipping + unitPackaging + num(product.labor_cost)}
+            lossPercent={num(product.loss_percent ?? 0)}
+            targetMarginPercent={num(product.target_margin_percent ?? 30) || 30}
+          />
         </section>
       )}
 
