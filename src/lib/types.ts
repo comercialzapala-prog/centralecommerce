@@ -210,7 +210,8 @@ export type MonthlyCmvTrackEntry = {
   entryQty: number
   entryUnitCost: number
   soldQty: number
-  salePrice: number
+  lostQty?: number
+  salePrice?: number
 }
 
 export type ProductCatalogSpec = {

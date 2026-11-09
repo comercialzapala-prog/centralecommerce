@@ -81,27 +81,18 @@ export function MonthlyResidualCarousel({
   }
 
   function handleLoadUserExample() {
-    // Carrega o fluxo completo no próprio mês: Inicia com 100 pçs a R$ 5 = 500 -> Sai/Vende 50 -> Sobra 50 Residual = 250 -> Entra +100 a R$ 10 = 1000 -> Total 1250 / 150 = R$ 8,33
+    // Caso exato: Tinha 300 a R$ 6,00 -> Vendeu 137 (R$ 822) -> Perdeu 15 (R$ 90) -> Sobrou 148 (R$ 888) -> Entrou 100 a R$ 10 (R$ 1.000) -> 1.888 / 248 = R$ 7,61
     setEntries((prev) =>
       prev.map((item, idx) => {
         if (idx === 0) {
           return {
             ...item,
-            initialOverrideQty: 100,
-            initialOverrideCost: 5,
-            soldQty: 50,
-            salePrice: 12,
+            initialOverrideQty: 300,
+            initialOverrideCost: 6,
+            soldQty: 137,
+            lostQty: 15,
             entryQty: 100,
             entryUnitCost: 10,
-          }
-        }
-        if (idx === 1) {
-          return {
-            ...item,
-            soldQty: 60,
-            salePrice: 16,
-            entryQty: 0,
-            entryUnitCost: 0,
           }
         }
         return item
@@ -400,27 +391,24 @@ export function MonthlyResidualCarousel({
               </div>
             </div>
 
-            {/* Passo 1: Saídas / Vendas do Mês e Sobra Residual */}
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 space-y-2">
+            {/* Passo 1: Saídas / Vendas e Perdas do Mês (Sem precisar digitar preço de venda!) */}
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="font-semibold text-rose-800 dark:text-rose-300">
-                  1. Estoque que Iniciou ({formatNumber(activeCard.residualQty + activeCard.soldQty)}{' '}
-                  pçs a {formatCurrency(activeCard.residualUnitCost)}) &amp; Saídas / Vendas de{' '}
+                  1. Estoque Inicial ({formatNumber(activeCard.startQty)} pçs ×{' '}
+                  {formatCurrency(activeCard.startUnitCost)} ={' '}
+                  <strong>{formatCurrency(activeCard.startValue)}</strong>) &amp; Saídas de{' '}
                   {activeCard.label}
                 </span>
-                <span className="font-mono text-[11px]">
-                  Valor Inicial:{' '}
-                  <strong>
-                    {formatCurrency(
-                      (activeCard.residualQty + activeCard.soldQty) * activeCard.residualUnitCost,
-                    )}
-                  </strong>
+                <span className="font-mono text-[11px] text-rose-700 dark:text-rose-300">
+                  Saída Total: {formatNumber(activeCard.totalExitQty)} pçs (
+                  {formatCurrency(activeCard.totalExitValue)})
                 </span>
               </div>
 
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
                 <div>
-                  <Label className="text-[10px]">(-) Saídas / Vendas (Peças)</Label>
+                  <Label className="text-[10px]">(-) Peças Vendidas</Label>
                   <Input
                     type="number"
                     min={0}
@@ -432,35 +420,43 @@ export function MonthlyResidualCarousel({
                     }
                     className="mt-0.5 h-7 font-mono text-xs"
                   />
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">Preço Vendido (R$)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={entries[activeCard.index]?.salePrice ?? activeCard.suggestedSalePrice}
-                    onChange={(e) =>
-                      updateEntry(activeCard.index, {
-                        salePrice: Math.max(0, Number(e.target.value)),
-                      })
-                    }
-                    className="mt-0.5 h-7 font-mono text-xs"
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">CMV das Saídas</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-semibold text-rose-700 dark:text-rose-300">
-                    {formatCurrency(activeCard.cmvSold)}
+                  <div className="mt-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                    Valor: {formatCurrency(activeCard.soldCostValue)}
                   </div>
                 </div>
 
                 <div>
-                  <Label className="text-[10px]">Lucro das Vendas</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(activeCard.grossProfit)}
+                  <Label className="text-[10px]">(-) Peças Perdidas</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={entries[activeCard.index]?.lostQty ?? 0}
+                    onChange={(e) =>
+                      updateEntry(activeCard.index, {
+                        lostQty: Math.max(0, Number(e.target.value)),
+                      })
+                    }
+                    className="mt-0.5 h-7 font-mono text-xs"
+                  />
+                  <div className="mt-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
+                    Perda: -{formatCurrency(activeCard.lostCostValue)}
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">Vendidas − Perdidas</Label>
+                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-bold text-foreground">
+                    {formatCurrency(activeCard.netSoldMinusLostValue)}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    {formatNumber(activeCard.soldQty - activeCard.lostQty)} pçs líq.
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">Total Saídas (Vendas+Perdas)</Label>
+                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-semibold text-rose-700 dark:text-rose-300">
+                    {formatNumber(activeCard.totalExitQty)} pçs ({formatCurrency(activeCard.totalExitValue)})
                   </div>
                 </div>
 

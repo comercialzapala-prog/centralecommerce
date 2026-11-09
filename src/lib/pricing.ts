@@ -187,6 +187,16 @@ export type ComputedMonthCard = {
   index: number
   monthKey: string
   label: string
+  startQty: number
+  startUnitCost: number
+  startValue: number
+  soldQty: number
+  soldCostValue: number
+  lostQty: number
+  lostCostValue: number
+  netSoldMinusLostValue: number
+  totalExitQty: number
+  totalExitValue: number
   residualQty: number
   residualUnitCost: number
   residualValue: number
@@ -200,7 +210,6 @@ export type ComputedMonthCard = {
   costDeltaPercent: number
   averageStatus: 'HIGHER' | 'LOWER' | 'SAME'
   suggestedSalePrice: number
-  soldQty: number
   salePrice: number
   revenue: number
   cmvSold: number
@@ -243,9 +252,10 @@ export function buildDefaultMonthlyTrack(params: {
     label: m.label,
     initialOverrideQty: idx === 0 ? initStock : null,
     initialOverrideCost: idx === 0 ? baseCost : null,
-    entryQty: idx === 1 ? 100 : 0,
-    entryUnitCost: idx === 1 ? round2(baseCost * 2) : baseCost,
+    entryQty: idx === 0 ? 100 : 0,
+    entryUnitCost: idx === 0 ? round2(baseCost * 2) : baseCost,
     soldQty: idx === 0 ? Math.min(50, Math.round(initStock / 2)) : 0,
+    lostQty: 0,
     salePrice: basePrice,
   }))
 }
@@ -283,12 +293,22 @@ export function computeMonthlyCarouselChain(
         ? Math.max(0, round2(num(entry.initialOverrideCost)))
         : prevWeightedCost
 
-    // 2. Saídas / Vendas do mês (descontadas do estoque inicial para achar quanto sobrou de Residual)
-    const soldQty = Math.max(0, Math.round(num(entry.soldQty)))
-    const cmvSold = round2(soldQty * startUnitCost)
+    const startValue = round2(startQty * startUnitCost)
 
-    // 3. Estoque Residual que sobrou após as vendas do mês
-    const residualQty = Math.max(0, startQty - soldQty)
+    // 2. Saídas do mês: Peças Vendidas e Peças Perdidas (calculadas automaticamente pelo Custo Unitário Vigente)
+    const soldQty = Math.max(0, Math.round(num(entry.soldQty)))
+    const soldCostValue = round2(soldQty * startUnitCost)
+
+    const lostQty = Math.max(0, Math.round(num(entry.lostQty)))
+    const lostCostValue = round2(lostQty * startUnitCost)
+
+    const netSoldMinusLostValue = round2(soldCostValue - lostCostValue)
+    const totalExitQty = soldQty + lostQty
+    const totalExitValue = round2(totalExitQty * startUnitCost)
+    const cmvSold = totalExitValue
+
+    // 3. Estoque Residual que sobrou após descontar vendidas e perdidas
+    const residualQty = Math.max(0, startQty - totalExitQty)
     const residualUnitCost = startUnitCost
     const residualValue = round2(residualQty * residualUnitCost)
 
@@ -333,6 +353,16 @@ export function computeMonthlyCarouselChain(
       index,
       monthKey: entry.monthKey,
       label: entry.label,
+      startQty,
+      startUnitCost,
+      startValue,
+      soldQty,
+      soldCostValue,
+      lostQty,
+      lostCostValue,
+      netSoldMinusLostValue,
+      totalExitQty,
+      totalExitValue,
       residualQty,
       residualUnitCost,
       residualValue,
@@ -346,7 +376,6 @@ export function computeMonthlyCarouselChain(
       costDeltaPercent,
       averageStatus,
       suggestedSalePrice,
-      soldQty,
       salePrice,
       revenue,
       cmvSold,
