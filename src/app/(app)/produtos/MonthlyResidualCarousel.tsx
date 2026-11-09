@@ -2,7 +2,6 @@
 
 import {
   ArrowDownRight,
-  ArrowRight,
   ArrowUpRight,
   Check,
   ChevronLeft,
