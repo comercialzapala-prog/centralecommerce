@@ -28,13 +28,17 @@ export function MonthlyResidualCarousel({
   extraUnitCosts = 0,
   lossPercent = 0,
   targetMarginPercent = 30,
+  externalUnitCost,
   onApplyWeightedCost,
+  onTrackEntriesChange,
 }: {
   product: ProductStats
   extraUnitCosts?: number
   lossPercent?: number
   targetMarginPercent?: number
+  externalUnitCost?: number
   onApplyWeightedCost?: (newCost: number, suggestedPrice: number) => void
+  onTrackEntriesChange?: (entries: MonthlyCmvTrackEntry[], activeWeightedCost: number) => void
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -43,7 +47,7 @@ export function MonthlyResidualCarousel({
   const [entries, setEntries] = useState<MonthlyCmvTrackEntry[]>(() =>
     buildDefaultMonthlyTrack({
       initialStock: Math.max(0, num(product.stock_balance)),
-      unitCost: num(product.unit_cost),
+      unitCost: num(product.unit_cost) > 0 ? num(product.unit_cost) : (externalUnitCost ?? 0),
       salePrice: num(product.sale_price),
       existingTrack: product.monthly_cmv_track,
     }),
@@ -51,7 +55,7 @@ export function MonthlyResidualCarousel({
 
   // Card da esquerda (Parado / Fixo) vs Card da direita (Carrossel que o usuário puxa)
   const [pinnedIndex, setPinnedIndex] = useState<number>(0) // Ex: Janeiro (0)
-  const [activeIndex, setActiveIndex] = useState<number>(1) // Ex: Fevereiro (1 - Mês vigente)
+  const [activeIndex, setActiveIndex] = useState<number>(0) // Inicia em Janeiro p/ refletir imediato
 
   const cards = useMemo(
     () =>
@@ -64,12 +68,19 @@ export function MonthlyResidualCarousel({
   )
 
   const pinnedCard = cards[pinnedIndex] ?? cards[0]
-  const activeCard = cards[activeIndex] ?? cards[1] ?? cards[0]
+  const activeCard = cards[activeIndex] ?? cards[0]
 
   function updateEntry(index: number, patch: Partial<MonthlyCmvTrackEntry>) {
-    setEntries((prev) =>
-      prev.map((item, idx) => (idx === index ? { ...item, ...patch } : item)),
-    )
+    const next = entries.map((item, idx) => (idx === index ? { ...item, ...patch } : item))
+    setEntries(next)
+    // Notifica o pai fora do updater do setState (evita update durante render)
+    const nextCards = computeMonthlyCarouselChain(next, {
+      extraUnitCosts,
+      lossPercent,
+      targetMarginPercent,
+    })
+    const targetCard = nextCards[activeIndex] ?? nextCards[index] ?? nextCards[0]
+    onTrackEntriesChange?.(next, targetCard?.newWeightedCost ?? 0)
   }
 
   function handlePrevMonth() {
@@ -104,16 +115,18 @@ export function MonthlyResidualCarousel({
 
   function handleSaveTrack(applyActiveToProduct = false) {
     setFeedback(null)
+    const shouldApplyCost =
+      applyActiveToProduct || (num(product.unit_cost) <= 0 && activeCard.newWeightedCost > 0)
     startTransition(async () => {
       const res = await saveProductMonthlyCmvTrackAction({
         productId: product.product_id,
         monthlyTrack: entries,
-        applyUnitCost: applyActiveToProduct ? activeCard.newWeightedCost : null,
+        applyUnitCost: shouldApplyCost ? activeCard.newWeightedCost : null,
         applySalePrice: applyActiveToProduct ? activeCard.suggestedSalePrice : null,
       })
       setFeedback({ ok: res.ok, text: res.message })
       if (res.ok) {
-        if (applyActiveToProduct && onApplyWeightedCost) {
+        if (shouldApplyCost && onApplyWeightedCost) {
           onApplyWeightedCost(activeCard.newWeightedCost, activeCard.suggestedSalePrice)
         }
         router.refresh()
@@ -406,9 +419,14 @@ export function MonthlyResidualCarousel({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
-                <div>
-                  <Label className="text-[10px]">(-) Peças Vendidas</Label>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                <div className="rounded-md border bg-background/80 p-2 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-semibold text-foreground">(-) Peças Vendidas</Label>
+                    <span className="font-mono text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                      {formatCurrency(activeCard.soldCostValue)}
+                    </span>
+                  </div>
                   <Input
                     type="number"
                     min={0}
@@ -418,15 +436,18 @@ export function MonthlyResidualCarousel({
                         soldQty: Math.max(0, Number(e.target.value)),
                       })
                     }
-                    className="mt-0.5 h-7 font-mono text-xs"
+                    className="h-7 font-mono text-xs font-bold"
                   />
-                  <div className="mt-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-                    Valor: {formatCurrency(activeCard.soldCostValue)}
-                  </div>
+                  <p className="text-[9px] text-muted-foreground">Unidades faturadas no mês</p>
                 </div>
 
-                <div>
-                  <Label className="text-[10px]">(-) Peças Perdidas</Label>
+                <div className="rounded-md border bg-background/80 p-2 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-semibold text-rose-700 dark:text-rose-300">(-) Peças Perdidas</Label>
+                    <span className="font-mono text-[10px] font-bold text-rose-700 dark:text-rose-300">
+                      -{formatCurrency(activeCard.lostCostValue)}
+                    </span>
+                  </div>
                   <Input
                     type="number"
                     min={0}
@@ -436,36 +457,22 @@ export function MonthlyResidualCarousel({
                         lostQty: Math.max(0, Number(e.target.value)),
                       })
                     }
-                    className="mt-0.5 h-7 font-mono text-xs"
+                    className="h-7 font-mono text-xs font-bold"
                   />
-                  <div className="mt-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-300">
-                    Perda: -{formatCurrency(activeCard.lostCostValue)}
-                  </div>
+                  <p className="text-[9px] text-muted-foreground">Avarias e quebras no estoque</p>
                 </div>
 
-                <div>
-                  <Label className="text-[10px]">Vendidas − Perdidas</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-bold text-foreground">
-                    {formatCurrency(activeCard.netSoldMinusLostValue)}
+                <div className="flex flex-col justify-between rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-amber-900 dark:text-amber-200">
+                    <span>(=) Sobrou Residual</span>
+                    <span className="font-mono">{formatNumber(activeCard.residualQty)} pçs</span>
                   </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {formatNumber(activeCard.soldQty - activeCard.lostQty)} pçs líq.
+                  <div className="my-0.5 font-mono text-sm font-extrabold text-amber-900 dark:text-amber-100">
+                    {formatCurrency(activeCard.residualValue)}
                   </div>
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">Total Saídas (Vendas+Perdas)</Label>
-                  <div className="mt-0.5 flex h-7 items-center rounded-md border bg-background px-2 font-mono text-xs font-semibold text-rose-700 dark:text-rose-300">
-                    {formatNumber(activeCard.totalExitQty)} pçs ({formatCurrency(activeCard.totalExitValue)})
-                  </div>
-                </div>
-
-                <div>
-                  <Label className="text-[10px]">(=) Sobrou Residual</Label>
-                  <div className="mt-0.5 flex h-7 items-center justify-between rounded-md border border-amber-500/40 bg-amber-500/10 px-2 font-mono text-xs font-bold text-amber-800 dark:text-amber-300">
-                    <span>{formatNumber(activeCard.residualQty)} pçs</span>
-                    <span>{formatCurrency(activeCard.residualValue)}</span>
-                  </div>
+                  <p className="text-[9px] text-muted-foreground">
+                    Saldo disponível p/ o cálculo da nova média
+                  </p>
                 </div>
               </div>
             </div>

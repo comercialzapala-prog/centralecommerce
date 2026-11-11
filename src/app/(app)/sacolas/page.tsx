@@ -90,6 +90,11 @@ export default async function SacolasPage() {
       <RouteTabs
         items={[
           { href: '/produtos', label: 'Catálogo de Produtos', badge: saleProducts.length },
+          {
+            href: '/precificacao',
+            label: 'Planilha de Precificação (ML)',
+            badge: saleProducts.length,
+          },
           { href: '/sacolas', label: 'Sacolas & Embalagens', badge: packagingProducts.length },
         ]}
       />

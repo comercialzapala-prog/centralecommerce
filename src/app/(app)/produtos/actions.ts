@@ -24,6 +24,7 @@ import type { MonthlyCmvTrackEntry, ProductCatalogSpec, ProductItemKind } from '
 
 function revalidateProducts() {
   revalidatePath('/produtos', 'layout')
+  revalidatePath('/precificacao')
   revalidatePath('/sacolas')
   revalidatePath('/movimentacoes')
   revalidatePath('/vendas', 'layout')
@@ -121,6 +122,12 @@ function readCatalogSpec(formData: FormData): ProductCatalogSpec {
       formData,
       'target_margin_percent',
       'Margem pretendida (%)',
+      false,
+    ),
+    burn_margin_percent: readAmount(
+      formData,
+      'burn_margin_percent',
+      'Margem na queima (%)',
       false,
     ),
     marketplace_percent: readAmount(formData, 'marketplace_percent', 'Comissão padrão (%)', false),
@@ -260,8 +267,19 @@ export async function saveProductPricingAction(input: {
   laborCost: number
   lossPercent: number
   targetMarginPercent: number
+  burnMarginPercent?: number
+  burnPriceOverride?: number | null
+  competitorAvgPrice?: number | null
+  includeMlFixedFee?: boolean
   marketplacePercent: number
   taxPercent: number
+  linkedPackagingProductId?: string | null
+  linkedPackagingQty?: number | null
+  grossWeightGrams?: number | null
+  lengthCm?: number | null
+  widthCm?: number | null
+  heightCm?: number | null
+  monthlyTrack?: MonthlyCmvTrackEntry[] | null
   applySalePrice?: number | null
 }): Promise<{ ok: boolean; message: string }> {
   try {
@@ -289,8 +307,30 @@ export async function saveProductPricingAction(input: {
       labor_cost: Math.max(0, Number(input.laborCost) || 0),
       loss_percent: Math.max(0, Number(input.lossPercent) || 0),
       target_margin_percent: Math.max(0, Number(input.targetMarginPercent) || 30),
+      burn_margin_percent:
+        input.burnMarginPercent !== undefined ? Math.max(0, Number(input.burnMarginPercent)) : 8,
+      burn_price_override:
+        input.burnPriceOverride !== undefined && input.burnPriceOverride !== null && input.burnPriceOverride > 0
+          ? Number(input.burnPriceOverride)
+          : null,
+      competitor_avg_price:
+        input.competitorAvgPrice !== undefined && input.competitorAvgPrice !== null && input.competitorAvgPrice > 0
+          ? Number(input.competitorAvgPrice)
+          : null,
+      include_ml_fixed_fee:
+        input.includeMlFixedFee !== undefined ? Boolean(input.includeMlFixedFee) : true,
       marketplace_percent: Math.max(0, Number(input.marketplacePercent) || 0),
       tax_percent: Math.max(0, Number(input.taxPercent) || 0),
+      linked_packaging_product_id:
+        input.linkedPackagingProductId !== undefined ? input.linkedPackagingProductId : undefined,
+      linked_packaging_qty:
+        input.linkedPackagingQty !== undefined ? input.linkedPackagingQty : undefined,
+      gross_weight_grams:
+        input.grossWeightGrams !== undefined ? input.grossWeightGrams : undefined,
+      length_cm: input.lengthCm !== undefined ? input.lengthCm : undefined,
+      width_cm: input.widthCm !== undefined ? input.widthCm : undefined,
+      height_cm: input.heightCm !== undefined ? input.heightCm : undefined,
+      monthly_cmv_track: input.monthlyTrack !== undefined ? input.monthlyTrack : undefined,
     })
 
     revalidateProducts()
@@ -405,6 +445,181 @@ export async function saveProductMonthlyCmvTrackAction(input: {
     return {
       ok: false,
       message: err instanceof Error ? err.message : 'Erro ao salvar carrossel mensal.',
+    }
+  }
+}
+
+export type PricingSheetSaveItem = {
+  productId: string
+  sku?: string | null
+  unitCost: number
+  salePrice: number
+  shippingCost: number
+  packagingCost: number
+  laborCost: number
+  lossPercent: number
+  targetMarginPercent: number
+  taxPercent: number
+  mlListingType: 'CLASSICO' | 'PREMIUM'
+  mlClassicPercent: number
+  mlPremiumPercent: number
+  mlFixedFeeMode: 'AUTO_79' | 'MANUAL' | 'EXEMPT'
+  mlFixedFeeAmount: number
+}
+
+export async function savePricingSheetBatchAction(
+  items: PricingSheetSaveItem[],
+): Promise<{ ok: boolean; savedCount: number; message: string }> {
+  try {
+    if (!Array.isArray(items) || items.length === 0) {
+      return { ok: false, savedCount: 0, message: 'Nenhum item para salvar.' }
+    }
+
+    const supabase = await createClient()
+    let savedCount = 0
+
+    for (const item of items) {
+      if (!item.productId) continue
+
+      const unitCost = Number(Math.max(0, Number(item.unitCost) || 0).toFixed(2))
+      const salePrice = Number(Math.max(0, Number(item.salePrice) || 0).toFixed(2))
+      const activeMktPercent =
+        item.mlListingType === 'PREMIUM'
+          ? Math.max(0, Number(item.mlPremiumPercent) || 0)
+          : Math.max(0, Number(item.mlClassicPercent) || 0)
+
+      const { error } = await supabase
+        .from('products')
+        .update({
+          unit_cost: unitCost,
+          sale_price: salePrice,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', item.productId)
+
+      if (error) {
+        return {
+          ok: false,
+          savedCount,
+          message: `Erro ao salvar produto: ${describeDbError(error)}`,
+        }
+      }
+
+      await saveProductCatalogSpec(item.productId, item.sku ?? null, {
+        shipping_cost: Math.max(0, Number(item.shippingCost) || 0),
+        packaging_cost: Math.max(0, Number(item.packagingCost) || 0),
+        labor_cost: Math.max(0, Number(item.laborCost) || 0),
+        loss_percent: Math.max(0, Number(item.lossPercent) || 0),
+        target_margin_percent: Math.max(0, Number(item.targetMarginPercent) || 20),
+        tax_percent: Math.max(0, Number(item.taxPercent) || 0),
+        marketplace_percent: activeMktPercent,
+        ml_listing_type: item.mlListingType,
+        ml_classic_percent: Math.max(0, Number(item.mlClassicPercent) || 12),
+        ml_premium_percent: Math.max(0, Number(item.mlPremiumPercent) || 17),
+        ml_fixed_fee_mode: item.mlFixedFeeMode,
+        ml_fixed_fee: Math.max(0, Number(item.mlFixedFeeAmount) || 6),
+      })
+
+      savedCount += 1
+    }
+
+    revalidateProducts()
+    return {
+      ok: true,
+      savedCount,
+      message:
+        savedCount === 1
+          ? 'Precificação, custo, impostos e taxas do ML salvos no produto!'
+          : `Planilha salva! ${savedCount} produtos atualizados com novos custos, taxas do ML e preços.`,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      savedCount: 0,
+      message: err instanceof Error ? err.message : 'Erro ao salvar planilha de precificação.',
+    }
+  }
+}
+
+export async function createProductFromSimulationAction(input: {
+  name: string
+  sku?: string
+  category?: string
+  unitCost: number
+  salePrice: number
+  shippingCost: number
+  packagingCost: number
+  laborCost: number
+  lossPercent: number
+  targetMarginPercent: number
+  taxPercent: number
+  mlListingType: 'CLASSICO' | 'PREMIUM'
+  mlClassicPercent: number
+  mlPremiumPercent: number
+  mlFixedFeeMode: 'AUTO_79' | 'MANUAL' | 'EXEMPT'
+  mlFixedFeeAmount: number
+}): Promise<{ ok: boolean; productId?: string; message: string }> {
+  try {
+    const cleanName = (input.name ?? '').trim()
+    if (!cleanName) {
+      return { ok: false, message: 'Informe o nome do produto para cadastrar no catálogo.' }
+    }
+
+    const supabase = await createClient()
+    const cleanSku = (input.sku ?? '').trim() || null
+    const unitCost = Number(Math.max(0, Number(input.unitCost) || 0).toFixed(2))
+    const salePrice = Number(Math.max(0, Number(input.salePrice) || 0).toFixed(2))
+    const activeMktPercent =
+      input.mlListingType === 'PREMIUM'
+        ? Math.max(0, Number(input.mlPremiumPercent) || 0)
+        : Math.max(0, Number(input.mlClassicPercent) || 0)
+
+    const { data, error } = await supabase
+      .from('products')
+      .insert({
+        name: cleanName,
+        sku: cleanSku,
+        category: (input.category ?? '').trim() || 'Simulado na Planilha',
+        unit_cost: unitCost,
+        sale_price: salePrice,
+        active: true,
+      })
+      .select('id, sku')
+      .single()
+
+    if (error || !data) {
+      return {
+        ok: false,
+        message: error ? describeDbError(error) : 'Erro ao criar produto.',
+      }
+    }
+
+    await saveProductCatalogSpec(data.id as string, (data.sku as string | null) ?? cleanSku, {
+      item_kind: 'PRODUTO',
+      shipping_cost: Math.max(0, Number(input.shippingCost) || 0),
+      packaging_cost: Math.max(0, Number(input.packagingCost) || 0),
+      labor_cost: Math.max(0, Number(input.laborCost) || 0),
+      loss_percent: Math.max(0, Number(input.lossPercent) || 0),
+      target_margin_percent: Math.max(0, Number(input.targetMarginPercent) || 20),
+      tax_percent: Math.max(0, Number(input.taxPercent) || 0),
+      marketplace_percent: activeMktPercent,
+      ml_listing_type: input.mlListingType,
+      ml_classic_percent: Math.max(0, Number(input.mlClassicPercent) || 12),
+      ml_premium_percent: Math.max(0, Number(input.mlPremiumPercent) || 17),
+      ml_fixed_fee_mode: input.mlFixedFeeMode,
+      ml_fixed_fee: Math.max(0, Number(input.mlFixedFeeAmount) || 6),
+    })
+
+    revalidateProducts()
+    return {
+      ok: true,
+      productId: String(data.id),
+      message: `Produto "${cleanName}" cadastrado no catálogo com toda a precificação do ML!`,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Erro ao cadastrar produto simulado.',
     }
   }
 }

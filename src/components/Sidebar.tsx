@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   Boxes,
+  Calculator,
   FolderTree,
   LayoutDashboard,
   Package,
@@ -48,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: '/vendas', label: 'Vendas', icon: ShoppingCart },
       { href: '/produtos', label: 'Produtos', icon: Package },
+      { href: '/precificacao', label: 'Precificação', icon: Calculator },
       { href: '/sacolas', label: 'Sacolas & Embalagens', icon: ShoppingBag },
     ],
   },

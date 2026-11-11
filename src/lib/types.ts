@@ -224,13 +224,26 @@ export type ProductCatalogSpec = {
   supplier_sku?: string | null
   net_weight_grams?: number | null
   gross_weight_grams?: number | null
+  length_cm?: number | null
+  width_cm?: number | null
+  height_cm?: number | null
   shipping_cost?: number | string
+  supplier_transfer_freight?: number | string
   packaging_cost?: number | string
   labor_cost?: number | string
   loss_percent?: number | string
   target_margin_percent?: number | string
+  burn_margin_percent?: number | string
+  burn_price_override?: number | string | null
+  competitor_avg_price?: number | string | null
+  include_ml_fixed_fee?: boolean | null
   marketplace_percent?: number | string
   tax_percent?: number | string
+  ml_listing_type?: 'CLASSICO' | 'PREMIUM' | null
+  ml_classic_percent?: number | string
+  ml_premium_percent?: number | string
+  ml_fixed_fee?: number | string
+  ml_fixed_fee_mode?: 'AUTO_79' | 'MANUAL' | 'EXEMPT' | null
   monthly_cmv_track?: MonthlyCmvTrackEntry[] | null
   voltage?: string | null
   capacity?: string | null

@@ -482,12 +482,17 @@ export function ProductForm({
           </div>
 
           <div className="rounded-xl border bg-muted/20 p-3.5 space-y-3">
-            <p className="text-xs font-medium text-muted-foreground">
-              Custos e taxas unitárias (somados automaticamente em cima do produto quando vendido no ERP)
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-foreground">
+                Custos de Aquisição &amp; Margens do Produto
+              </p>
+              <span className="text-[11px] text-muted-foreground">
+                Taxas do Mercado Livre (14% comissão + 6% imposto + R$ 6,50 fixo) são simuladas no botão <strong>Precificar ML</strong>
+              </span>
+            </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Field label="Custo unitário / CMV (R$)" htmlFor="prod-cost">
+              <Field label="Custo unitário pago (R$)" htmlFor="prod-cost" hint="Valor de compra com IPI">
                 <MoneyInput
                   id="prod-cost"
                   name="unit_cost"
@@ -495,7 +500,7 @@ export function ProductForm({
                 />
               </Field>
 
-              <Field label="Preço de venda (R$)" htmlFor="prod-price">
+              <Field label="Preço de venda atual (R$)" htmlFor="prod-price" hint="Preço cadastrado no ERP">
                 <MoneyInput
                   id="prod-price"
                   name="sale_price"
@@ -504,23 +509,69 @@ export function ProductForm({
               </Field>
 
               <Field
-                label="Frete unitário padrão (R$)"
+                label="Frete loja extra (R$)"
                 htmlFor="prod-shipping"
-                hint="Multiplicado pela qtd. vendida no pedido"
+                hint="Deixe 0 se o envio for pelo Mercado Livre"
               >
                 <MoneyInput
                   id="prod-shipping"
                   name="shipping_cost"
                   defaultValue={
-                    product?.shipping_cost !== undefined ? String(num(product.shipping_cost)) : ''
+                    product?.shipping_cost !== undefined && num(product.shipping_cost) > 0
+                      ? String(num(product.shipping_cost))
+                      : '0'
                   }
+                />
+              </Field>
+
+              <Field
+                label="Margem pretendida normal (%)"
+                htmlFor="prod-target-margin"
+                hint="Venda normal (padrão 30%)"
+              >
+                <MoneyInput
+                  id="prod-target-margin"
+                  name="target_margin_percent"
+                  defaultValue={
+                    product?.target_margin_percent !== undefined
+                      ? String(num(product.target_margin_percent))
+                      : '30'
+                  }
+                />
+              </Field>
+
+              <Field
+                label="Margem de Queima ML (%)"
+                htmlFor="prod-burn-margin"
+                hint="Giro rápido / ranquear (padrão 8%)"
+              >
+                <MoneyInput
+                  id="prod-burn-margin"
+                  name="burn_margin_percent"
+                  defaultValue={
+                    product?.burn_margin_percent !== undefined
+                      ? String(num(product.burn_margin_percent))
+                      : '8'
+                  }
+                />
+              </Field>
+
+              <Field
+                label="Perda / quebra no estoque (%)"
+                htmlFor="prod-loss-pct"
+                hint="Avarias estimadas (padrão 2%)"
+              >
+                <MoneyInput
+                  id="prod-loss-pct"
+                  name="loss_percent"
+                  defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '2'}
                 />
               </Field>
 
               <Field
                 label="Embalagem extra fixa (R$)"
                 htmlFor="prod-packaging"
-                hint="Se 0, usa o custo da sacola vinculada"
+                hint="Se 0, usa a sacola vinculada"
               >
                 <MoneyInput
                   id="prod-packaging"
@@ -531,62 +582,26 @@ export function ProductForm({
                 />
               </Field>
 
-              <Field label="Comissão padrão (%)" htmlFor="prod-mkt-pct" hint="Ex.: 15 para 15%">
+              <Field label="Comissão ML padrão (%)" htmlFor="prod-mkt-pct" hint="Padrão ML Clássico: 14%">
                 <MoneyInput
                   id="prod-mkt-pct"
                   name="marketplace_percent"
                   defaultValue={
-                    product?.marketplace_percent !== undefined
+                    product?.marketplace_percent !== undefined && num(product.marketplace_percent) > 0
                       ? String(num(product.marketplace_percent))
-                      : ''
+                      : '14'
                   }
                 />
               </Field>
 
-              <Field label="Imposto NF (%)" htmlFor="prod-tax-pct" hint="Ex.: 6 para 6%">
+              <Field label="Imposto NF (%)" htmlFor="prod-tax-pct" hint="Padrão Sapo ML: 6%">
                 <MoneyInput
                   id="prod-tax-pct"
                   name="tax_percent"
-                  defaultValue={product?.tax_percent !== undefined ? String(num(product.tax_percent)) : ''}
-                />
-              </Field>
-
-              <Field
-                label="Hora de trabalho / Mão de obra (R$)"
-                htmlFor="prod-labor"
-                hint="Custo operacional por un."
-              >
-                <MoneyInput
-                  id="prod-labor"
-                  name="labor_cost"
-                  defaultValue={product?.labor_cost !== undefined ? String(num(product.labor_cost)) : ''}
-                />
-              </Field>
-
-              <Field
-                label="Perda variável / quebra (%)"
-                htmlFor="prod-loss-pct"
-                hint="Se não tiver perda, deixe 0"
-              >
-                <MoneyInput
-                  id="prod-loss-pct"
-                  name="loss_percent"
-                  defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '0'}
-                />
-              </Field>
-
-              <Field
-                label="Margem pretendida (%)"
-                htmlFor="prod-target-margin"
-                hint="Ex.: 30 para 30% (divide por 0,70)"
-              >
-                <MoneyInput
-                  id="prod-target-margin"
-                  name="target_margin_percent"
                   defaultValue={
-                    product?.target_margin_percent !== undefined
-                      ? String(num(product.target_margin_percent))
-                      : '30'
+                    product?.tax_percent !== undefined && num(product.tax_percent) > 0
+                      ? String(num(product.tax_percent))
+                      : '6'
                   }
                 />
               </Field>

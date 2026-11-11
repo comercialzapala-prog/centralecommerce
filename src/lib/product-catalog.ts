@@ -5,6 +5,13 @@ import { cache } from 'react'
 import { IntegrationService } from '@/integrations/erp/service'
 import { createAuthedClient as createClient } from '@/lib/auth'
 import { num, round2 } from '@/lib/format'
+import {
+  computeMonthlyCarouselChain,
+  estimateMlShippingAndBag,
+  ML_DEFAULT_BURN_MARGIN_PERCENT,
+  ML_DEFAULT_CLASSIC_PERCENT,
+  ML_DEFAULT_TAX_PERCENT,
+} from '@/lib/pricing'
 import type {
   PackagingConsumptionByProduct,
   Product,
@@ -42,6 +49,32 @@ function parseItemKind(v: unknown, name?: unknown, category?: unknown): ProductI
   return 'PRODUTO'
 }
 
+function floatOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? round2(n) : null
+}
+
+function resolveEffectiveUnitCostFromTrack(
+  dbUnitCost: number,
+  track: ProductCatalogSpec['monthly_cmv_track'],
+): number {
+  if (dbUnitCost > 0) return dbUnitCost
+  if (!Array.isArray(track) || track.length === 0) return 0
+  const hasAnyCost = track.some(
+    (m) => num(m.initialOverrideCost) > 0 || num(m.entryUnitCost) > 0,
+  )
+  if (!hasAnyCost) return 0
+  const chain = computeMonthlyCarouselChain(track, {
+    extraUnitCosts: 0,
+    lossPercent: 0,
+    targetMarginPercent: 30,
+  })
+  return chain[0]?.newWeightedCost && chain[0].newWeightedCost > 0
+    ? round2(chain[0].newWeightedCost)
+    : 0
+}
+
 export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined): ProductCatalogSpec {
   if (!raw) return {}
 
@@ -52,6 +85,9 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
 
   const linkedPkgId = strOrNull(raw.linked_packaging_product_id ?? raw.linkedPackagingProductId)
   const linkedPkgQty = intOrNull(raw.linked_packaging_qty ?? raw.linkedPackagingQty) ?? (linkedPkgId ? 1 : null)
+
+  const rawMkt = num(raw.marketplace_percent ?? raw.marketplacePercent)
+  const rawTax = num(raw.tax_percent ?? raw.taxPercent)
 
   return {
     item_kind:
@@ -66,7 +102,11 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
     supplier_sku: strOrNull(raw.supplier_sku ?? raw.supplierSku),
     net_weight_grams: intOrNull(raw.net_weight_grams ?? raw.netWeightGrams),
     gross_weight_grams: grossGrams,
+    length_cm: floatOrNull(raw.length_cm ?? raw.lengthCm ?? raw.compProd),
+    width_cm: floatOrNull(raw.width_cm ?? raw.widthCm ?? raw.largProd),
+    height_cm: floatOrNull(raw.height_cm ?? raw.heightCm ?? raw.altProd),
     shipping_cost: num(raw.shipping_cost ?? raw.shippingCost),
+    supplier_transfer_freight: num(raw.supplier_transfer_freight ?? raw.freteTransfUnit),
     packaging_cost: num(raw.packaging_cost ?? raw.packagingCost),
     labor_cost: num(raw.labor_cost ?? raw.laborCost),
     loss_percent: num(raw.loss_percent ?? raw.lossPercent),
@@ -74,8 +114,35 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
       raw.target_margin_percent !== undefined || raw.targetMarginPercent !== undefined
         ? num(raw.target_margin_percent ?? raw.targetMarginPercent)
         : 30,
-    marketplace_percent: num(raw.marketplace_percent ?? raw.marketplacePercent),
-    tax_percent: num(raw.tax_percent ?? raw.taxPercent),
+    burn_margin_percent:
+      raw.burn_margin_percent !== undefined
+        ? num(raw.burn_margin_percent)
+        : ML_DEFAULT_BURN_MARGIN_PERCENT,
+    burn_price_override: floatOrNull(raw.burn_price_override),
+    competitor_avg_price: floatOrNull(raw.competitor_avg_price ?? raw.precoMedioML),
+    include_ml_fixed_fee:
+      typeof raw.include_ml_fixed_fee === 'boolean' ? raw.include_ml_fixed_fee : true,
+    marketplace_percent: rawMkt > 0 ? rawMkt : ML_DEFAULT_CLASSIC_PERCENT,
+    tax_percent: rawTax > 0 ? rawTax : ML_DEFAULT_TAX_PERCENT,
+    ml_listing_type:
+      raw.ml_listing_type === 'PREMIUM' || raw.ml_listing_type === 'CLASSICO'
+        ? raw.ml_listing_type
+        : undefined,
+    ml_classic_percent:
+      raw.ml_classic_percent !== undefined && num(raw.ml_classic_percent) > 0
+        ? num(raw.ml_classic_percent)
+        : ML_DEFAULT_CLASSIC_PERCENT,
+    ml_premium_percent:
+      raw.ml_premium_percent !== undefined && num(raw.ml_premium_percent) > 0
+        ? num(raw.ml_premium_percent)
+        : 19,
+    ml_fixed_fee: raw.ml_fixed_fee !== undefined ? num(raw.ml_fixed_fee) : 6.5,
+    ml_fixed_fee_mode:
+      raw.ml_fixed_fee_mode === 'AUTO_79' ||
+      raw.ml_fixed_fee_mode === 'MANUAL' ||
+      raw.ml_fixed_fee_mode === 'EXEMPT'
+        ? raw.ml_fixed_fee_mode
+        : undefined,
     voltage: strOrNull(raw.voltage),
     capacity: strOrNull(raw.capacity),
     material_primary: strOrNull(raw.material_primary ?? raw.materialPrimary),
@@ -144,32 +211,74 @@ export async function enrichProducts(products: Product[]): Promise<Product[]> {
     const byId = specs.get(product.id)
     const mergedSpec: ProductCatalogSpec = { ...(bySku ?? {}), ...(byId ?? {}) }
     const itemKind = parseItemKind(mergedSpec.item_kind, product.name, product.category)
+    const effectiveUnitCost =
+      itemKind === 'INSUMO'
+        ? num(product.unit_cost) > 0
+          ? num(product.unit_cost)
+          : estimateMlShippingAndBag({ bagSku: product.sku, bagName: product.name }).recommendedBag.defaultCost
+        : resolveEffectiveUnitCostFromTrack(num(product.unit_cost), mergedSpec.monthly_cmv_track)
+
     return {
       ...product,
       ...mergedSpec,
+      unit_cost: effectiveUnitCost,
       item_kind: itemKind,
+      marketplace_percent:
+        num(mergedSpec.marketplace_percent) > 0
+          ? num(mergedSpec.marketplace_percent)
+          : ML_DEFAULT_CLASSIC_PERCENT,
+      tax_percent:
+        num(mergedSpec.tax_percent) > 0 ? num(mergedSpec.tax_percent) : ML_DEFAULT_TAX_PERCENT,
     }
   })
 
   const byIdMap = new Map(baseEnriched.map((p) => [p.id, p]))
+  const insumoBags = baseEnriched.filter((p) => p.item_kind === 'INSUMO')
 
   return baseEnriched.map((product) => {
-    const pkgId = product.linked_packaging_product_id
-    const pkgProd = pkgId ? byIdMap.get(pkgId) : undefined
+    if (product.item_kind === 'INSUMO') {
+      const est = estimateMlShippingAndBag({ bagSku: product.sku, bagName: product.name })
+      return {
+        ...product,
+        length_cm: product.length_cm ?? est.recommendedBag.lengthCm,
+        width_cm: product.width_cm ?? est.recommendedBag.widthCm,
+        height_cm: product.height_cm ?? est.recommendedBag.heightCm,
+      }
+    }
+
+    const est = estimateMlShippingAndBag({
+      grossWeightGrams: product.gross_weight_grams,
+      netWeightGrams: product.net_weight_grams,
+      lengthCm: product.length_cm,
+      widthCm: product.width_cm,
+      heightCm: product.height_cm,
+    })
+
+    let pkgId = product.linked_packaging_product_id
+    let pkgProd = pkgId ? byIdMap.get(pkgId) : undefined
+    if (!pkgProd && insumoBags.length > 0) {
+      pkgProd = insumoBags.find(
+        (b) =>
+          (b.sku ?? '').toUpperCase() === est.recommendedBag.code ||
+          b.name.toUpperCase().includes(est.recommendedBag.code.replace('SAC-', 'SACOLA ')),
+      )
+      if (pkgProd) pkgId = pkgProd.id
+    }
+
     const pkgQty = Math.max(1, num(product.linked_packaging_qty ?? 1))
-    const linkedUnitCost = pkgProd ? num(pkgProd.unit_cost) : 0
+    const linkedUnitCost = pkgProd ? num(pkgProd.unit_cost) : est.recommendedBag.defaultCost
     const effectivePackagingCost =
       num(product.packaging_cost) > 0
         ? num(product.packaging_cost)
-        : pkgProd
-          ? round2(linkedUnitCost * pkgQty)
-          : 0
+        : round2(linkedUnitCost * pkgQty)
 
     return {
       ...product,
+      linked_packaging_product_id: pkgId ?? null,
+      linked_packaging_qty: pkgId ? pkgQty : 1,
       packaging_cost: effectivePackagingCost,
-      linked_packaging_name: pkgProd?.name ?? null,
-      linked_packaging_sku: pkgProd?.sku ?? null,
+      linked_packaging_name: pkgProd?.name ?? est.recommendedBag.name,
+      linked_packaging_sku: pkgProd?.sku ?? est.recommendedBag.code,
       linked_packaging_unit_cost: linkedUnitCost,
     }
   })
@@ -236,14 +345,52 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
     const byId = specs.get(row.product_id)
     const spec: ProductCatalogSpec = { ...(bySku ?? {}), ...(byId ?? {}) }
     const itemKind = parseItemKind(spec.item_kind, row.name, row.category)
+    const effectiveUnitCost =
+      itemKind === 'INSUMO'
+        ? num(row.unit_cost) > 0
+          ? num(row.unit_cost)
+          : estimateMlShippingAndBag({ bagSku: row.sku, bagName: row.name }).recommendedBag.defaultCost
+        : resolveEffectiveUnitCostFromTrack(num(row.unit_cost), spec.monthly_cmv_track)
+
     return {
       ...row,
       ...spec,
+      unit_cost: effectiveUnitCost,
       item_kind: itemKind,
+      marketplace_percent:
+        num(spec.marketplace_percent) > 0
+          ? num(spec.marketplace_percent)
+          : ML_DEFAULT_CLASSIC_PERCENT,
+      tax_percent:
+        num(spec.tax_percent) > 0 ? num(spec.tax_percent) : ML_DEFAULT_TAX_PERCENT,
     }
   })
 
   const statsById = new Map<string, ProductStats>(allStats.map((r) => [r.product_id, r]))
+  const insumoBagStats = allStats.filter((r) => r.item_kind === 'INSUMO')
+
+  // Auto-preenche vínculo de sacola quando o produto ainda não tem sacola vinculada
+  for (const prod of allStats) {
+    if (prod.item_kind === 'INSUMO') continue
+    if (!prod.linked_packaging_product_id && insumoBagStats.length > 0) {
+      const est = estimateMlShippingAndBag({
+        grossWeightGrams: prod.gross_weight_grams,
+        netWeightGrams: prod.net_weight_grams,
+        lengthCm: prod.length_cm,
+        widthCm: prod.width_cm,
+        heightCm: prod.height_cm,
+      })
+      const match = insumoBagStats.find(
+        (b) =>
+          (b.sku ?? '').toUpperCase() === est.recommendedBag.code ||
+          b.name.toUpperCase().includes(est.recommendedBag.code.replace('SAC-', 'SACOLA ')),
+      )
+      if (match) {
+        prod.linked_packaging_product_id = match.product_id
+        prod.linked_packaging_qty = 1
+      }
+    }
+  }
 
   // Soma movimentos reais de baixa automática de sacolas por (parentProductId, packagingProductId)
   const recordedPkgByPair = new Map<string, number>()
@@ -439,12 +586,22 @@ export async function saveProductCatalogSpec(
     supplier_sku: spec.supplier_sku !== undefined ? spec.supplier_sku : (prevData.supplier_sku ?? null),
     net_weight_grams: netGrams ?? null,
     gross_weight_grams: grossGrams ?? null,
+    length_cm:
+      spec.length_cm !== undefined ? spec.length_cm : (floatOrNull(prevData.length_cm) ?? null),
+    width_cm:
+      spec.width_cm !== undefined ? spec.width_cm : (floatOrNull(prevData.width_cm) ?? null),
+    height_cm:
+      spec.height_cm !== undefined ? spec.height_cm : (floatOrNull(prevData.height_cm) ?? null),
     weightKg: grossGrams
       ? Number((grossGrams / 1000).toFixed(3))
       : netGrams
         ? Number((netGrams / 1000).toFixed(3))
         : null,
     shipping_cost: spec.shipping_cost !== undefined ? num(spec.shipping_cost) : num(prevData.shipping_cost),
+    supplier_transfer_freight:
+      spec.supplier_transfer_freight !== undefined
+        ? num(spec.supplier_transfer_freight)
+        : num(prevData.supplier_transfer_freight),
     packaging_cost: spec.packaging_cost !== undefined ? num(spec.packaging_cost) : num(prevData.packaging_cost),
     labor_cost: spec.labor_cost !== undefined ? num(spec.labor_cost) : num(prevData.labor_cost),
     loss_percent: spec.loss_percent !== undefined ? num(spec.loss_percent) : num(prevData.loss_percent),
@@ -454,9 +611,60 @@ export async function saveProductCatalogSpec(
         : prevData.target_margin_percent !== undefined
           ? num(prevData.target_margin_percent)
           : 30,
+    burn_margin_percent:
+      spec.burn_margin_percent !== undefined
+        ? num(spec.burn_margin_percent)
+        : prevData.burn_margin_percent !== undefined
+          ? num(prevData.burn_margin_percent)
+          : ML_DEFAULT_BURN_MARGIN_PERCENT,
+    burn_price_override:
+      spec.burn_price_override !== undefined
+        ? floatOrNull(spec.burn_price_override)
+        : floatOrNull(prevData.burn_price_override),
+    competitor_avg_price:
+      spec.competitor_avg_price !== undefined
+        ? floatOrNull(spec.competitor_avg_price)
+        : floatOrNull(prevData.competitor_avg_price),
+    include_ml_fixed_fee:
+      spec.include_ml_fixed_fee !== undefined
+        ? Boolean(spec.include_ml_fixed_fee)
+        : prevData.include_ml_fixed_fee !== undefined
+          ? Boolean(prevData.include_ml_fixed_fee)
+          : true,
     marketplace_percent:
-      spec.marketplace_percent !== undefined ? num(spec.marketplace_percent) : num(prevData.marketplace_percent),
-    tax_percent: spec.tax_percent !== undefined ? num(spec.tax_percent) : num(prevData.tax_percent),
+      spec.marketplace_percent !== undefined
+        ? num(spec.marketplace_percent)
+        : num(prevData.marketplace_percent) || ML_DEFAULT_CLASSIC_PERCENT,
+    tax_percent:
+      spec.tax_percent !== undefined
+        ? num(spec.tax_percent)
+        : num(prevData.tax_percent) || ML_DEFAULT_TAX_PERCENT,
+    ml_listing_type:
+      spec.ml_listing_type !== undefined
+        ? spec.ml_listing_type
+        : (prevData.ml_listing_type ?? 'CLASSICO'),
+    ml_classic_percent:
+      spec.ml_classic_percent !== undefined
+        ? num(spec.ml_classic_percent)
+        : prevData.ml_classic_percent !== undefined
+          ? num(prevData.ml_classic_percent)
+          : 12,
+    ml_premium_percent:
+      spec.ml_premium_percent !== undefined
+        ? num(spec.ml_premium_percent)
+        : prevData.ml_premium_percent !== undefined
+          ? num(prevData.ml_premium_percent)
+          : 17,
+    ml_fixed_fee:
+      spec.ml_fixed_fee !== undefined
+        ? num(spec.ml_fixed_fee)
+        : prevData.ml_fixed_fee !== undefined
+          ? num(prevData.ml_fixed_fee)
+          : 6,
+    ml_fixed_fee_mode:
+      spec.ml_fixed_fee_mode !== undefined
+        ? spec.ml_fixed_fee_mode
+        : (prevData.ml_fixed_fee_mode ?? 'AUTO_79'),
     voltage: spec.voltage !== undefined ? spec.voltage : (prevData.voltage ?? null),
     capacity: spec.capacity !== undefined ? spec.capacity : (prevData.capacity ?? null),
     material_primary:

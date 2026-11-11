@@ -32,6 +32,7 @@ const ROUTES = [
   { path: '/investimentos', expect: 'Investimentos' },
   { path: '/vendas', expect: 'Vendas' },
   { path: '/produtos', expect: 'Produtos' },
+  { path: '/precificacao', expect: 'Planilha de Precifica' },
   { path: '/movimentacoes', expect: 'Movimenta' },
   { path: '/fornecedores', expect: 'Fornecedores' },
   { path: '/categorias', expect: 'Categorias' },

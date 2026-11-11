@@ -126,7 +126,13 @@ export default async function ProductDetailPage({
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {!isInsumo && <ProductPricingDialog product={product} triggerVariant="button" />}
+            {!isInsumo && (
+              <ProductPricingDialog
+                product={product}
+                packagingOptions={packagingOptions}
+                triggerVariant="button"
+              />
+            )}
             <PackagingLinkDialog
               products={linkableProducts}
               packagingOptions={packagingOptions}

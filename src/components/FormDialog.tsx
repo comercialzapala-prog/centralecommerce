@@ -47,9 +47,20 @@ export function FormDialog({
   onSuccess?: () => void
 }) {
   const [open, setOpen] = React.useState(false)
+  const [confirmClosePrompt, setConfirmClosePrompt] = React.useState(false)
   const [state, setState] = React.useState<ActionState>(IDLE_STATE)
   // Trocar a key remonta o formulario -- campos limpos a cada abertura/sucesso.
   const [formKey, setFormKey] = React.useState(0)
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setConfirmClosePrompt(false)
+      setOpen(true)
+      return
+    }
+    // Nunca fecha direto ao clicar fora: pede confirmação primeiro!
+    setConfirmClosePrompt(true)
+  }
 
   /**
    * O resultado e tratado aqui dentro, no proprio callback da transicao, em
@@ -63,6 +74,7 @@ export function FormDialog({
 
       if (result.status === 'success') {
         toast.success(result.message ?? 'Salvo com sucesso.')
+        setConfirmClosePrompt(false)
         setOpen(false)
         setFormKey((value) => value + 1)
         onSuccess?.()
@@ -76,13 +88,44 @@ export function FormDialog({
       {React.cloneElement(trigger as React.ReactElement<{ onClick?: () => void }>, {
         onClick: () => {
           setState(IDLE_STATE)
+          setConfirmClosePrompt(false)
           setFormKey((value) => value + 1)
           setOpen(true)
         },
       })}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className={cn('max-h-[90dvh] overflow-y-auto sm:max-w-lg', className)}>
+          {confirmClosePrompt ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-amber-500 bg-amber-500/15 px-3 py-2.5 text-xs">
+              <div className="flex items-center gap-2 font-semibold text-amber-950 dark:text-amber-200">
+                <TriangleAlert className="size-4 shrink-0 text-amber-600" />
+                <span>Deseja realmente fechar esta janela sem salvar?</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="default"
+                  onClick={() => setConfirmClosePrompt(false)}
+                >
+                  Continuar editando
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmClosePrompt(false)
+                    setOpen(false)
+                  }}
+                >
+                  Sim, fechar
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             {description ? <DialogDescription>{description}</DialogDescription> : null}
@@ -98,7 +141,11 @@ export function FormDialog({
             ) : null}
 
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfirmClosePrompt(true)}
+              >
                 Cancelar
               </Button>
               <SubmitButton>{submitLabel}</SubmitButton>

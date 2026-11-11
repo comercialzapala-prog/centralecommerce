@@ -1,10 +1,11 @@
 import Link from 'next/link'
-import { Boxes, Eye, EyeOff, Package, ShoppingBag, TrendingUp, Truck } from 'lucide-react'
+import { Boxes, Calculator, Eye, EyeOff, Package, ShoppingBag, TrendingUp, Truck } from 'lucide-react'
 
 import { ConfirmActionButton } from '@/components/FormDialog'
 import { MetricCard } from '@/components/MetricCard'
 import { EmptyState, PageHeader } from '@/components/PageHeader'
 import { RouteTabs } from '@/components/RouteTabs'
+import { buttonVariants } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -84,6 +85,13 @@ export default async function ProductsPage() {
         description="Acompanhe estoque, ficha técnica, CMV, frete, sacola vinculada e margem líquida por SKU."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/precificacao"
+              className={buttonVariants({ variant: 'outline', size: 'sm' })}
+            >
+              <Calculator className="size-3.5 text-amber-600" />
+              Planilha de Precificação (ML)
+            </Link>
             <OlistPullButton />
             <PackagingLinkDialog
               products={linkableProducts}
@@ -100,6 +108,11 @@ export default async function ProductsPage() {
       <RouteTabs
         items={[
           { href: '/produtos', label: 'Catálogo de Produtos', badge: saleProducts.length },
+          {
+            href: '/precificacao',
+            label: 'Planilha de Precificação (ML)',
+            badge: saleProducts.length,
+          },
           { href: '/sacolas', label: 'Sacolas & Embalagens', badge: packagingProducts.length },
         ]}
       />
@@ -293,7 +306,10 @@ export default async function ProductsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <ProductPricingDialog product={product} />
+                        <ProductPricingDialog
+                          product={product}
+                          packagingOptions={packagingOptions}
+                        />
                         <ProductForm product={product} packagingOptions={packagingOptions} />
                         <ConfirmActionButton
                           action={setProductActive}
