@@ -255,7 +255,7 @@ export function ProductPricingDialog({
     setOpen(false)
   }
 
-  function handleSave(applyPriceValue?: number | null) {
+  function handleSave(applyPriceValue?: number | null, shouldClose = true) {
     setFeedback(null)
     const resolvedDbBag = packagingOptions.find((b) => b.id === selectedBagId)
     startTransition(async () => {
@@ -285,6 +285,9 @@ export function ProductPricingDialog({
       setFeedback({ ok: res.ok, text: res.message })
       if (res.ok) {
         setConfirmClosePrompt(false)
+        if (shouldClose) {
+          setOpen(false)
+        }
         router.refresh()
       }
     })
@@ -344,16 +347,30 @@ export function ProductPricingDialog({
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => handleSave(pricing.suggestedPrice)}
+                    onClick={() => handleSave(pricing.suggestedPrice, true)}
                     disabled={pending}
                   >
                     <Check className="size-3.5" />
-                    Salvar e Fechar
+                    {pending ? 'Salvando...' : 'Salvar e Fechar'}
                   </Button>
-                  <Button type="button" size="sm" variant="destructive" onClick={confirmCloseNow}>
+                  <Button type="button" size="sm" variant="destructive" onClick={confirmCloseNow} disabled={pending}>
                     Fechar sem Salvar
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {/* Mensagem de Feedback (Erro ou Sucesso) */}
+            {feedback && (
+              <div
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-xs font-semibold',
+                  feedback.ok
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+                    : 'border-destructive/40 bg-destructive/10 text-destructive',
+                )}
+              >
+                {feedback.text}
               </div>
             )}
 
@@ -858,7 +875,7 @@ export function ProductPricingDialog({
 
             {/* RODAPÉ ASSERTIVO DE AÇÕES */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-              <Button type="button" variant="outline" size="sm" onClick={handleRequestClose}>
+              <Button type="button" variant="outline" size="sm" onClick={handleRequestClose} disabled={pending}>
                 Fechar
               </Button>
               <div className="flex flex-wrap items-center gap-2">
@@ -868,22 +885,22 @@ export function ProductPricingDialog({
                     variant="outline"
                     size="sm"
                     disabled={pending}
-                    onClick={() => handleSave(mlSim.burn?.price ?? null)}
+                    onClick={() => handleSave(mlSim.burn?.price ?? null, true)}
                     className="border-amber-500 bg-amber-500/10 text-amber-900 hover:bg-amber-500/20 font-bold dark:text-amber-200"
                   >
                     <Flame className="size-3.5 text-amber-600" />
-                    Aplicar Preço de Queima ({formatCurrency(mlSim.burn.price)})
+                    {pending ? 'Salvando...' : `Aplicar Preço de Queima (${formatCurrency(mlSim.burn.price)})`}
                   </Button>
                 )}
                 <Button
                   type="button"
                   size="sm"
                   disabled={pending}
-                  onClick={() => handleSave(mlSim.normal?.price ?? pricing.suggestedPrice)}
+                  onClick={() => handleSave(mlSim.normal?.price ?? pricing.suggestedPrice, true)}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
                 >
                   <Sparkles className="size-3.5" />
-                  Aplicar Preço Normal Sugerido ({formatCurrency(mlSim.normal?.price ?? pricing.suggestedPrice)})
+                  {pending ? 'Salvando...' : `Aplicar Preço Normal Sugerido (${formatCurrency(mlSim.normal?.price ?? pricing.suggestedPrice)})`}
                 </Button>
               </div>
             </div>
