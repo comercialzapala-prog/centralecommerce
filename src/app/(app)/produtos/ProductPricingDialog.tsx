@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -155,6 +155,46 @@ export function ProductPricingDialog({
       existingTrack: product.monthly_cmv_track,
     }),
   )
+
+  // Sincroniza o estado interno do simulador sempre que o modal abre ou os dados do produto mudam
+  useEffect(() => {
+    if (open) {
+      setUnitCost(resolveInitialUnitCost(product))
+      setTargetMarginPercent(
+        num(product.target_margin_percent ?? 30) > 0 ? num(product.target_margin_percent ?? 30) : 30,
+      )
+      setBurnMarginPercent(
+        product.burn_margin_percent !== undefined
+          ? num(product.burn_margin_percent)
+          : ML_DEFAULT_BURN_MARGIN_PERCENT,
+      )
+      setBurnManualPrice(num(product.burn_price_override ?? 0))
+      setPackagingCost(
+        num(product.packaging_cost) > 0
+          ? num(product.packaging_cost)
+          : initialEst.recommendedBag.defaultCost,
+      )
+      setShippingCost(num(product.shipping_cost))
+      setLaborCost(num(product.labor_cost))
+      setLossPercent(
+        product.loss_percent !== undefined && product.loss_percent !== null
+          ? num(product.loss_percent)
+          : 2,
+      )
+      setMarketplacePercent(
+        num(product.marketplace_percent) > 0
+          ? num(product.marketplace_percent)
+          : ML_DEFAULT_CLASSIC_PERCENT,
+      )
+      setTaxPercent(num(product.tax_percent) > 0 ? num(product.tax_percent) : ML_DEFAULT_TAX_PERCENT)
+      setIncludeMlFixedFee(
+        product.include_ml_fixed_fee !== undefined ? Boolean(product.include_ml_fixed_fee) : true,
+      )
+      if (product.linked_packaging_product_id) {
+        setSelectedBagId(product.linked_packaging_product_id)
+      }
+    }
+  }, [open, product, initialEst])
 
   const effectiveUnitCost = unitCost > 0 ? unitCost : resolveInitialUnitCost(product)
 
@@ -832,7 +872,7 @@ export function ProductPricingDialog({
                 <Info className="size-3.5" />
                 <span>Parâmetros de Cálculo da Venda:</span>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 text-xs">
                 <div>
                   <Label className="text-[10px] text-muted-foreground">Sacola / Embalagem</Label>
                   <select
@@ -854,6 +894,19 @@ export function ProductPricingDialog({
                       ))
                     )}
                   </select>
+                </div>
+
+                <div>
+                  <Label className="text-[10px] text-muted-foreground font-semibold">Perda / Quebra (%)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={50}
+                    step="0.5"
+                    value={lossPercent}
+                    onChange={(e) => setLossPercent(Math.max(0, Number(e.target.value)))}
+                    className="mt-0.5 h-8 font-mono text-xs font-bold bg-background text-amber-800 dark:text-amber-300 border-amber-500/50"
+                  />
                 </div>
 
                 <div>

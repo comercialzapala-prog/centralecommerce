@@ -82,6 +82,51 @@ export function MoneyInput({
   )
 }
 
+/**
+ * Campo de percentual (%). Exibe sufixo '%' no canto direito sem poluir com 'R$'.
+ */
+export function PercentInput({
+  name,
+  defaultValue,
+  value,
+  onChange,
+  required,
+  id,
+  className,
+  placeholder = '0',
+}: {
+  name: string
+  defaultValue?: string | number | null
+  value?: string
+  onChange?: (value: string) => void
+  required?: boolean
+  id?: string
+  className?: string
+  placeholder?: string
+}) {
+  const controlled = value !== undefined
+
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        name={name}
+        inputMode="decimal"
+        autoComplete="off"
+        required={required}
+        placeholder={placeholder}
+        {...(controlled
+          ? { value, onChange: (event) => onChange?.(event.target.value) }
+          : { defaultValue: defaultValue ?? '' })}
+        className={cn('pr-7 tabular-nums', className)}
+      />
+      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+        %
+      </span>
+    </div>
+  )
+}
+
 /** Rotulo + campo, com o espacamento padrao dos formularios. */
 export function Field({
   label,

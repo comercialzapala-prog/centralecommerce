@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { PackageCheck, PackagePlus, Pencil, Plus } from 'lucide-react'
 
-import { Field, MoneyInput } from '@/components/FormControls'
+import { Field, MoneyInput, PercentInput } from '@/components/FormControls'
 import { FormDialog } from '@/components/FormDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -529,7 +529,7 @@ export function ProductForm({
                 htmlFor="prod-target-margin"
                 hint="Venda normal (padrão 30%)"
               >
-                <MoneyInput
+                <PercentInput
                   id="prod-target-margin"
                   name="target_margin_percent"
                   defaultValue={
@@ -545,7 +545,7 @@ export function ProductForm({
                 htmlFor="prod-burn-margin"
                 hint="Giro rápido / ranquear (padrão 8%)"
               >
-                <MoneyInput
+                <PercentInput
                   id="prod-burn-margin"
                   name="burn_margin_percent"
                   defaultValue={
@@ -561,7 +561,7 @@ export function ProductForm({
                 htmlFor="prod-loss-pct"
                 hint="Avarias estimadas (padrão 2%)"
               >
-                <MoneyInput
+                <PercentInput
                   id="prod-loss-pct"
                   name="loss_percent"
                   defaultValue={product?.loss_percent !== undefined ? String(num(product.loss_percent)) : '2'}
@@ -583,7 +583,7 @@ export function ProductForm({
               </Field>
 
               <Field label="Comissão ML padrão (%)" htmlFor="prod-mkt-pct" hint="Padrão ML Clássico: 14%">
-                <MoneyInput
+                <PercentInput
                   id="prod-mkt-pct"
                   name="marketplace_percent"
                   defaultValue={
@@ -595,7 +595,7 @@ export function ProductForm({
               </Field>
 
               <Field label="Imposto NF (%)" htmlFor="prod-tax-pct" hint="Padrão Sapo ML: 6%">
-                <MoneyInput
+                <PercentInput
                   id="prod-tax-pct"
                   name="tax_percent"
                   defaultValue={

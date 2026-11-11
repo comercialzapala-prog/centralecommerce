@@ -199,12 +199,17 @@ export default async function ProductsPage() {
                     ? num(product.burn_margin_percent)
                     : 8
 
+                const lossPercent =
+                  product.loss_percent !== undefined && product.loss_percent !== null
+                    ? num(product.loss_percent)
+                    : 2
+
                 const pricing = calculateProductPricing({
                   unitCost: num(product.unit_cost),
                   shippingCost: shippingUnit,
                   packagingCost: num(product.packaging_cost),
                   laborCost: num(product.labor_cost),
-                  lossPercent: num(product.loss_percent ?? 0),
+                  lossPercent,
                   targetMarginPercent: normalMarginTarget,
                   marketplacePercent: num(product.marketplace_percent),
                   taxPercent: num(product.tax_percent),
@@ -217,7 +222,7 @@ export default async function ProductsPage() {
                   packagingCost: num(product.packaging_cost),
                   shippingCost: shippingUnit,
                   laborCost: num(product.labor_cost),
-                  lossPercent: num(product.loss_percent ?? 2),
+                  lossPercent,
                   commissionPercent: num(product.marketplace_percent) || 14,
                   taxPercent: num(product.tax_percent) || 6,
                   includeFixedFee: product.include_ml_fixed_fee !== false,
