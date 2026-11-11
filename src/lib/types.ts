@@ -236,6 +236,7 @@ export type ProductCatalogSpec = {
   burn_margin_percent?: number | string
   burn_price_override?: number | string | null
   competitor_avg_price?: number | string | null
+  active_pricing_strategy?: 'NORMAL' | 'QUEIMA' | 'CUSTOM' | null
   include_ml_fixed_fee?: boolean | null
   marketplace_percent?: number | string
   tax_percent?: number | string

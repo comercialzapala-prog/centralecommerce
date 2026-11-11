@@ -120,6 +120,12 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
         : ML_DEFAULT_BURN_MARGIN_PERCENT,
     burn_price_override: floatOrNull(raw.burn_price_override),
     competitor_avg_price: floatOrNull(raw.competitor_avg_price ?? raw.precoMedioML),
+    active_pricing_strategy:
+      raw.active_pricing_strategy === 'QUEIMA' ||
+      raw.active_pricing_strategy === 'NORMAL' ||
+      raw.active_pricing_strategy === 'CUSTOM'
+        ? (raw.active_pricing_strategy as 'NORMAL' | 'QUEIMA' | 'CUSTOM')
+        : null,
     include_ml_fixed_fee:
       typeof raw.include_ml_fixed_fee === 'boolean' ? raw.include_ml_fixed_fee : true,
     marketplace_percent: rawMkt > 0 ? rawMkt : ML_DEFAULT_CLASSIC_PERCENT,

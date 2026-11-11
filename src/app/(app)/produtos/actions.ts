@@ -281,6 +281,7 @@ export async function saveProductPricingAction(input: {
   heightCm?: number | null
   monthlyTrack?: MonthlyCmvTrackEntry[] | null
   applySalePrice?: number | null
+  activePricingStrategy?: 'NORMAL' | 'QUEIMA' | 'CUSTOM' | null
 }): Promise<{ ok: boolean; message: string }> {
   try {
     const supabase = await createClient()
@@ -317,6 +318,8 @@ export async function saveProductPricingAction(input: {
         input.competitorAvgPrice !== undefined && input.competitorAvgPrice !== null && input.competitorAvgPrice > 0
           ? Number(input.competitorAvgPrice)
           : null,
+      active_pricing_strategy:
+        input.activePricingStrategy !== undefined ? input.activePricingStrategy : undefined,
       include_ml_fixed_fee:
         input.includeMlFixedFee !== undefined ? Boolean(input.includeMlFixedFee) : true,
       marketplace_percent: Math.max(0, Number(input.marketplacePercent) || 0),

@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Boxes, Calculator, Eye, EyeOff, Package, ShoppingBag, TrendingUp, Truck } from 'lucide-react'
+import { Boxes, Calculator, Eye, EyeOff, Flame, Package, ShoppingBag, Sparkles, TrendingUp, Truck } from 'lucide-react'
 
 import { ConfirmActionButton } from '@/components/FormDialog'
 import { MetricCard } from '@/components/MetricCard'
@@ -16,7 +16,11 @@ import {
 } from '@/components/ui/table'
 import { getProductStats } from '@/lib/data'
 import { formatCurrency, formatNumber, formatPercent, num } from '@/lib/format'
-import { calculateProductPricing } from '@/lib/pricing'
+import {
+  calculateMlSimulatorComparison,
+  calculateProductPricing,
+  evaluateMlSaleScenario,
+} from '@/lib/pricing'
 import { cn } from '@/lib/utils'
 
 import { setProductActive } from './actions'
@@ -172,11 +176,11 @@ export default async function ProductsPage() {
                 <TableHead className="text-right">Vendidos</TableHead>
                 <TableHead className="text-right">Custo</TableHead>
                 <TableHead className="text-right">Preço Atual</TableHead>
-                <TableHead className="text-right">Meta &amp; Preço Sugerido</TableHead>
+                <TableHead className="text-right">Estratégia &amp; Sugestão ML</TableHead>
                 <TableHead className="text-right">Frete Unit.</TableHead>
                 <TableHead className="text-right">Receita</TableHead>
                 <TableHead className="text-right">Frete + Sacolas</TableHead>
-                <TableHead className="text-right">Margem Líq.</TableHead>
+                <TableHead className="text-right">Margem Real (Vendas)</TableHead>
                 <TableHead className="w-[140px]" />
               </TableRow>
             </TableHeader>
@@ -188,18 +192,65 @@ export default async function ProductsPage() {
                 const shippingUnit = num(product.shipping_cost)
                 const shippingTotal = num(product.shipping_amount)
                 const packagingTotal = num(product.packaging_amount)
+
+                const normalMarginTarget = num(product.target_margin_percent ?? 30) || 30
+                const burnMarginTarget =
+                  product.burn_margin_percent !== undefined
+                    ? num(product.burn_margin_percent)
+                    : 8
+
                 const pricing = calculateProductPricing({
                   unitCost: num(product.unit_cost),
                   shippingCost: shippingUnit,
                   packagingCost: num(product.packaging_cost),
                   laborCost: num(product.labor_cost),
                   lossPercent: num(product.loss_percent ?? 0),
-                  targetMarginPercent: num(product.target_margin_percent ?? 30) || 30,
+                  targetMarginPercent: normalMarginTarget,
                   marketplacePercent: num(product.marketplace_percent),
                   taxPercent: num(product.tax_percent),
                   currentSalePrice: num(product.sale_price),
                   stockBalance: stock,
                 })
+
+                const mlSim = calculateMlSimulatorComparison({
+                  purchaseCost: num(product.unit_cost),
+                  packagingCost: num(product.packaging_cost),
+                  shippingCost: shippingUnit,
+                  laborCost: num(product.labor_cost),
+                  lossPercent: num(product.loss_percent ?? 2),
+                  commissionPercent: num(product.marketplace_percent) || 14,
+                  taxPercent: num(product.tax_percent) || 6,
+                  includeFixedFee: product.include_ml_fixed_fee !== false,
+                  normalMarginTargetPercent: normalMarginTarget,
+                  burnMarginTargetPercent: burnMarginTarget,
+                  burnManualPrice: num(product.burn_price_override ?? 0),
+                })
+
+                const currentSalePrice = num(product.sale_price)
+                const currentEval =
+                  currentSalePrice > 0
+                    ? evaluateMlSaleScenario(
+                        currentSalePrice,
+                        mlSim.baseCost,
+                        mlSim.totalRatesPercent,
+                        mlSim.includeFixedFee,
+                      )
+                    : null
+
+                const burnPrice = mlSim.burn?.price ?? 0
+                const normalPrice = mlSim.normal?.price ?? pricing.suggestedPrice
+
+                const isQueima =
+                  product.active_pricing_strategy === 'QUEIMA' ||
+                  (currentSalePrice > 0 &&
+                    burnPrice > 0 &&
+                    Math.abs(currentSalePrice - burnPrice) <= 0.25)
+                const isNormal =
+                  product.active_pricing_strategy === 'NORMAL' ||
+                  (!isQueima &&
+                    currentSalePrice > 0 &&
+                    normalPrice > 0 &&
+                    Math.abs(currentSalePrice - normalPrice) <= 0.25)
 
                 return (
                   <TableRow
@@ -266,16 +317,86 @@ export default async function ProductsPage() {
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatCurrency(product.sale_price)}
+                    <TableCell className="text-right tabular-nums">
+                      {currentSalePrice > 0 ? (
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-foreground">
+                            {formatCurrency(currentSalePrice)}
+                          </div>
+                          {isQueima ? (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <span className="inline-flex items-center gap-0.5 rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-0.2 text-[10px] font-extrabold text-amber-800 dark:text-amber-200">
+                                <Flame className="size-2.5 text-amber-600" /> Queima ({burnMarginTarget}%)
+                              </span>
+                              <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Sobra +{formatCurrency(currentEval?.profit ?? 0)}/un.
+                              </span>
+                            </div>
+                          ) : isNormal ? (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <span className="inline-flex items-center gap-0.5 rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.2 text-[10px] font-extrabold text-emerald-800 dark:text-emerald-200">
+                                <Sparkles className="size-2.5 text-emerald-600" /> Normal ({normalMarginTarget}%)
+                              </span>
+                              <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Sobra +{formatCurrency(currentEval?.profit ?? 0)}/un.
+                              </span>
+                            </div>
+                          ) : currentEval ? (
+                            <div className="text-[10px] text-muted-foreground">
+                              Sobra {currentEval.profit >= 0 ? '+' : ''}{formatCurrency(currentEval.profit)} ({formatPercent(currentEval.marginPercent)})
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">Não definido</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      <div className="font-semibold text-foreground">
-                        {formatCurrency(pricing.suggestedPrice)}
-                      </div>
-                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400">
-                        Meta {pricing.targetMarginPercent}% · Sobra {formatCurrency(pricing.grossProfit)}
-                      </div>
+                      {isQueima && mlSim.burn ? (
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-amber-700 dark:text-amber-300 flex items-center justify-end gap-1">
+                            <Flame className="size-3 text-amber-600" />
+                            {formatCurrency(mlSim.burn.price)}
+                          </div>
+                          <div className="text-[10px] font-semibold text-amber-800 dark:text-amber-200">
+                            Queima Ativa ({burnMarginTarget}%) · Sobra +{formatCurrency(mlSim.burn.profit)}
+                          </div>
+                          {normalPrice > 0 && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Normal ref: {formatCurrency(normalPrice)} ({normalMarginTarget}%)
+                            </div>
+                          )}
+                        </div>
+                      ) : isNormal && mlSim.normal ? (
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-emerald-700 dark:text-emerald-300 flex items-center justify-end gap-1">
+                            <Sparkles className="size-3 text-emerald-600" />
+                            {formatCurrency(mlSim.normal.price)}
+                          </div>
+                          <div className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                            Normal Ativa ({normalMarginTarget}%) · Sobra +{formatCurrency(mlSim.normal.profit)}
+                          </div>
+                          {burnPrice > 0 && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Queima ref: {formatCurrency(burnPrice)} ({burnMarginTarget}%)
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-0.5">
+                          <div className="font-semibold text-foreground">
+                            {formatCurrency(normalPrice)}
+                          </div>
+                          <div className="text-[10px] text-emerald-600 dark:text-emerald-400">
+                            Normal {normalMarginTarget}% · Sobra {formatCurrency(mlSim.normal?.profit ?? pricing.grossProfit)}
+                          </div>
+                          {burnPrice > 0 && (
+                            <div className="text-[10px] text-amber-700 dark:text-amber-300 font-medium">
+                              Queima {burnMarginTarget}%: {formatCurrency(burnPrice)}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {shippingUnit > 0 ? formatCurrency(shippingUnit) : '--'}
@@ -299,10 +420,18 @@ export default async function ProductsPage() {
                           : 'text-rose-600 dark:text-rose-400',
                       )}
                     >
-                      {formatCurrency(netMarginAmount)}
-                      <div className="text-[11px] font-normal text-muted-foreground">
-                        {formatPercent(netMarginPct)}
-                      </div>
+                      {num(product.qty_sold) > 0 ? (
+                        <div>
+                          <div>{formatCurrency(netMarginAmount)}</div>
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            {formatPercent(netMarginPct)} ({formatNumber(product.qty_sold)} vend.)
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground italic" title="Nenhuma venda concluída ainda no ERP">
+                          — (0 vendas)
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">

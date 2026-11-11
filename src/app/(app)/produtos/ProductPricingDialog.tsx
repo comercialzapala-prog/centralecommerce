@@ -255,7 +255,11 @@ export function ProductPricingDialog({
     setOpen(false)
   }
 
-  function handleSave(applyPriceValue?: number | null, shouldClose = true) {
+  function handleSave(
+    applyPriceValue?: number | null,
+    shouldClose = true,
+    pricingStrategy?: 'NORMAL' | 'QUEIMA' | 'CUSTOM',
+  ) {
     setFeedback(null)
     const resolvedDbBag = packagingOptions.find((b) => b.id === selectedBagId)
     startTransition(async () => {
@@ -281,6 +285,7 @@ export function ProductPricingDialog({
         heightCm,
         monthlyTrack: carouselEntries,
         applySalePrice: applyPriceValue,
+        activePricingStrategy: pricingStrategy,
       })
       setFeedback({ ok: res.ok, text: res.message })
       if (res.ok) {
@@ -521,79 +526,126 @@ export function ProductPricingDialog({
             </div>
 
             {/* BLOCO 2: OS 3 PREÇOS DE RESULTADO (VENDA NORMAL vs. QUEIMA vs. PISO) */}
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              {/* Card 1: Venda Normal */}
-              <div className="rounded-xl border-2 border-emerald-600/50 bg-emerald-500/10 p-4 shadow-xs">
-                <div className="flex items-center justify-between text-xs font-bold text-emerald-800 dark:text-emerald-300">
-                  <span className="flex items-center gap-1.5">
-                    <TrendingUp className="size-4" />
-                    Preço Venda Normal ({targetMarginPercent}%)
-                  </span>
-                  <span className="rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px]">Recomendado</span>
-                </div>
-                <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
-                  {mlSim.normal ? formatCurrency(mlSim.normal.price) : 'R$ 0,00'}
-                </div>
-                {mlSim.normal ? (
-                  <div className="mt-2 space-y-1 text-xs">
-                    <div className="font-bold text-emerald-700 dark:text-emerald-300">
-                      Sobra no bolso: +{formatCurrency(mlSim.normal.profit)} ({formatPercent(mlSim.normal.marginPercent)})
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Custo c/ taxas ML: {formatCurrency(mlSim.normal.totalCost)}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+            {(() => {
+              const currentProdSalePrice = num(product.sale_price)
+              const isBurnActive =
+                product.active_pricing_strategy === 'QUEIMA' ||
+                (currentProdSalePrice > 0 &&
+                  mlSim.burn &&
+                  Math.abs(currentProdSalePrice - mlSim.burn.price) <= 0.15)
+              const isNormalActive =
+                product.active_pricing_strategy === 'NORMAL' ||
+                (!isBurnActive &&
+                  currentProdSalePrice > 0 &&
+                  mlSim.normal &&
+                  Math.abs(currentProdSalePrice - mlSim.normal.price) <= 0.15)
 
-              {/* Card 2: Venda na Queima */}
-              <div className="rounded-xl border-2 border-amber-500/70 bg-amber-500/15 p-4 shadow-xs">
-                <div className="flex items-center justify-between text-xs font-bold text-amber-900 dark:text-amber-200">
-                  <span className="flex items-center gap-1.5">
-                    <Flame className="size-4 text-amber-600" />
-                    Preço na Queima ({burnMarginPercent}%)
-                  </span>
-                  <span className="rounded bg-amber-600 text-white px-1.5 py-0.5 text-[10px]">Ranquear</span>
-                </div>
-                <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
-                  {mlSim.burn ? formatCurrency(mlSim.burn.price) : 'R$ 0,00'}
-                </div>
-                {mlSim.burn ? (
-                  <div className="mt-2 space-y-1 text-xs">
-                    <div
-                      className={cn(
-                        'font-bold',
-                        mlSim.burn.profit >= 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-600',
-                      )}
-                    >
-                      Sobra no bolso: +{formatCurrency(mlSim.burn.profit)} ({formatPercent(mlSim.burn.marginPercent)})
-                    </div>
-                    {mlSim.priceDiscount !== null && (
-                      <div className="text-[11px] text-amber-800 dark:text-amber-300 font-semibold">
-                        Desconto vs. normal: -{formatCurrency(Math.abs(mlSim.priceDiscount))} ({mlSim.priceDiscountPercent}%)
-                      </div>
+              return (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {/* Card 1: Venda Normal */}
+                  <div
+                    className={cn(
+                      'rounded-xl border-2 p-4 shadow-xs transition-colors',
+                      isNormalActive
+                        ? 'border-emerald-600 bg-emerald-500/20 ring-2 ring-emerald-500/30'
+                        : 'border-emerald-600/50 bg-emerald-500/10',
                     )}
+                  >
+                    <div className="flex items-center justify-between text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                      <span className="flex items-center gap-1.5">
+                        <TrendingUp className="size-4" />
+                        Preço Venda Normal ({targetMarginPercent}%)
+                      </span>
+                      {isNormalActive ? (
+                        <span className="rounded bg-emerald-700 text-white px-2 py-0.5 text-[10px] font-extrabold shadow-xs">
+                          ✓ Ativo no Produto
+                        </span>
+                      ) : (
+                        <span className="rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px]">
+                          Recomendado
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
+                      {mlSim.normal ? formatCurrency(mlSim.normal.price) : 'R$ 0,00'}
+                    </div>
+                    {mlSim.normal ? (
+                      <div className="mt-2 space-y-1 text-xs">
+                        <div className="font-bold text-emerald-700 dark:text-emerald-300">
+                          Sobra no bolso: +{formatCurrency(mlSim.normal.profit)} ({formatPercent(mlSim.normal.marginPercent)})
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Custo c/ taxas ML: {formatCurrency(mlSim.normal.totalCost)}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
 
-              {/* Card 3: Piso sem Prejuízo */}
-              <div className="rounded-xl border-2 border-sky-500/30 bg-muted/30 p-4 shadow-xs">
-                <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    <ShieldCheck className="size-4 text-sky-600" />
-                    Piso sem Prejuízo (0% Margem)
-                  </span>
-                  <span className="text-[10px]">Break-even</span>
+                  {/* Card 2: Venda na Queima */}
+                  <div
+                    className={cn(
+                      'rounded-xl border-2 p-4 shadow-xs transition-colors',
+                      isBurnActive
+                        ? 'border-amber-600 bg-amber-500/25 ring-2 ring-amber-500/30'
+                        : 'border-amber-500/70 bg-amber-500/15',
+                    )}
+                  >
+                    <div className="flex items-center justify-between text-xs font-bold text-amber-900 dark:text-amber-200">
+                      <span className="flex items-center gap-1.5">
+                        <Flame className="size-4 text-amber-600" />
+                        Preço na Queima ({burnMarginPercent}%)
+                      </span>
+                      {isBurnActive ? (
+                        <span className="rounded bg-amber-700 text-white px-2 py-0.5 text-[10px] font-extrabold shadow-xs">
+                          ✓ Ativo no Produto
+                        </span>
+                      ) : (
+                        <span className="rounded bg-amber-600 text-white px-1.5 py-0.5 text-[10px]">
+                          Ranquear
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
+                      {mlSim.burn ? formatCurrency(mlSim.burn.price) : 'R$ 0,00'}
+                    </div>
+                    {mlSim.burn ? (
+                      <div className="mt-2 space-y-1 text-xs">
+                        <div
+                          className={cn(
+                            'font-bold',
+                            mlSim.burn.profit >= 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-600',
+                          )}
+                        >
+                          Sobra no bolso: +{formatCurrency(mlSim.burn.profit)} ({formatPercent(mlSim.burn.marginPercent)})
+                        </div>
+                        {mlSim.priceDiscount !== null && (
+                          <div className="text-[11px] text-amber-800 dark:text-amber-300 font-semibold">
+                            Desconto vs. normal: -{formatCurrency(Math.abs(mlSim.priceDiscount))} ({mlSim.priceDiscountPercent}%)
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Card 3: Piso sem Prejuízo */}
+                  <div className="rounded-xl border-2 border-sky-500/30 bg-muted/30 p-4 shadow-xs">
+                    <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <ShieldCheck className="size-4 text-sky-600" />
+                        Piso sem Prejuízo (0% Margem)
+                      </span>
+                      <span className="text-[10px]">Break-even</span>
+                    </div>
+                    <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
+                      {mlSim.floorPrice ? formatCurrency(mlSim.floorPrice) : 'R$ 0,00'}
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Preço mínimo absoluto no ML p/ empatar custos e taxas (Lucro R$ 0,00).
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-2 text-3xl font-extrabold tabular-nums text-foreground">
-                  {mlSim.floorPrice ? formatCurrency(mlSim.floorPrice) : 'R$ 0,00'}
-                </div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Preço mínimo absoluto no ML p/ empatar custos e taxas (Lucro R$ 0,00).
-                </div>
-              </div>
-            </div>
+              )
+            })()}
 
             {/* BLOCO 3: RAIO-X COMPLETO DAS TAXAS E DEDUÇÕES DO MERCADO LIVRE (TABELA LADO A LADO) */}
             <div className="rounded-xl border bg-card overflow-hidden">
@@ -885,7 +937,7 @@ export function ProductPricingDialog({
                     variant="outline"
                     size="sm"
                     disabled={pending}
-                    onClick={() => handleSave(mlSim.burn?.price ?? null, true)}
+                    onClick={() => handleSave(mlSim.burn?.price ?? null, true, 'QUEIMA')}
                     className="border-amber-500 bg-amber-500/10 text-amber-900 hover:bg-amber-500/20 font-bold dark:text-amber-200"
                   >
                     <Flame className="size-3.5 text-amber-600" />
@@ -896,7 +948,7 @@ export function ProductPricingDialog({
                   type="button"
                   size="sm"
                   disabled={pending}
-                  onClick={() => handleSave(mlSim.normal?.price ?? pricing.suggestedPrice, true)}
+                  onClick={() => handleSave(mlSim.normal?.price ?? pricing.suggestedPrice, true, 'NORMAL')}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
                 >
                   <Sparkles className="size-3.5" />
