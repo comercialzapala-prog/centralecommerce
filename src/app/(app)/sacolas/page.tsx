@@ -96,6 +96,7 @@ export default async function SacolasPage() {
             badge: saleProducts.length,
           },
           { href: '/sacolas', label: 'Sacolas & Embalagens', badge: packagingProducts.length },
+          { href: '/logistica', label: 'Logística & Frota' },
         ]}
       />
 
