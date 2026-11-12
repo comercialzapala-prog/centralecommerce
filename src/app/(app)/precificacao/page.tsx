@@ -1,4 +1,5 @@
 import { OlistPullButton } from '@/app/(app)/produtos/OlistPullButton'
+import { BubbleWrapLinkDialog } from '@/app/(app)/produtos/BubbleWrapLinkDialog'
 import { PackagingLinkDialog } from '@/app/(app)/produtos/PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from '@/app/(app)/produtos/ProductForm'
 import { PageHeader } from '@/components/PageHeader'
@@ -23,6 +24,34 @@ export default async function PricingPage() {
     stock_balance: bag.stock_balance,
   }))
 
+  const bubbleWrapInsumo = packagingProducts.find(
+    (p) => p.name.toUpperCase().includes('BOLHA') || p.sku?.toUpperCase().includes('BOLHA'),
+  )
+  const bubbleWrapOption: PackagingOption | null = bubbleWrapInsumo
+    ? {
+        id: bubbleWrapInsumo.product_id,
+        name: bubbleWrapInsumo.name,
+        sku: bubbleWrapInsumo.sku,
+        unit_cost: bubbleWrapInsumo.unit_cost,
+        stock_balance: bubbleWrapInsumo.stock_balance,
+      }
+    : null
+
+  const bubbleProducts = saleProducts.map((p) => ({
+    id: p.product_id,
+    name: p.name,
+    sku: p.sku,
+    category: p.category,
+    sale_price: p.sale_price,
+    unit_cost: p.unit_cost,
+    packaging_cost: p.packaging_cost,
+    linked_packaging_name: p.linked_packaging_name,
+    linked_packaging_sku: p.linked_packaging_sku,
+    linked_packaging_unit_cost: p.linked_packaging_unit_cost,
+    use_bubble_wrap: p.use_bubble_wrap,
+    linked_bubble_wrap_qty: p.linked_bubble_wrap_qty,
+  }))
+
   const linkableProducts = saleProducts.map((prod) => ({
     id: prod.product_id,
     name: prod.name,
@@ -43,6 +72,11 @@ export default async function PricingPage() {
         description="Simule margens na hora com custo de aquisição, impostos da NF, comissões do Mercado Livre (Clássico vs Premium), taxa fixa (< R$ 79) e frete."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <BubbleWrapLinkDialog
+              products={bubbleProducts}
+              bubbleWrapInsumo={bubbleWrapOption}
+              triggerLabel="🫧 Plástico Bolha"
+            />
             <OlistPullButton />
             <PackagingLinkDialog
               products={linkableProducts}

@@ -43,7 +43,13 @@ export function ProductForm({
   const [itemKind, setItemKind] = React.useState<ProductItemKind>(initialKind)
 
   const selectableBags = React.useMemo(
-    () => packagingOptions.filter((opt) => opt.id !== id),
+    () =>
+      packagingOptions.filter(
+        (opt) =>
+          opt.id !== id &&
+          !opt.name.toUpperCase().includes('BOLHA') &&
+          !opt.sku?.toUpperCase().includes('BOLHA'),
+      ),
     [packagingOptions, id],
   )
 
@@ -361,6 +367,34 @@ export function ProductForm({
                   className="tabular-nums"
                 />
               </Field>
+            </div>
+
+            {/* Proteção Extra: Plástico Bolha */}
+            <div className="pt-2.5 border-t border-sky-500/20 flex flex-wrap items-center justify-between gap-3">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-foreground">
+                <input
+                  type="checkbox"
+                  name="use_bubble_wrap"
+                  value="true"
+                  defaultChecked={Boolean(product?.use_bubble_wrap)}
+                  className="size-4 rounded accent-sky-600"
+                />
+                <span>🫧 Este produto utiliza Plástico Bolha para proteção</span>
+              </label>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Qtd. por un.:</span>
+                <input
+                  name="linked_bubble_wrap_qty"
+                  type="number"
+                  min={1}
+                  step={1}
+                  defaultValue={String(product?.linked_bubble_wrap_qty ?? 1)}
+                  className="h-7 w-14 rounded border bg-background px-2 font-mono text-xs tabular-nums text-foreground"
+                />
+                <span className="font-semibold text-sky-700 dark:text-sky-300">
+                  (+R$ 0,60/un.)
+                </span>
+              </div>
             </div>
           </div>
 

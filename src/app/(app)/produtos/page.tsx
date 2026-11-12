@@ -24,6 +24,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { setProductActive } from './actions'
+import { BubbleWrapLinkDialog, type BubbleWrapProductItem } from './BubbleWrapLinkDialog'
 import { OlistPullButton } from './OlistPullButton'
 import { PackagingLinkDialog } from './PackagingLinkDialog'
 import { ProductForm, type PackagingOption } from './ProductForm'
@@ -43,6 +44,34 @@ export default async function ProductsPage() {
     sku: bag.sku,
     unit_cost: bag.unit_cost,
     stock_balance: bag.stock_balance,
+  }))
+
+  const bubbleWrapInsumo = packagingProducts.find(
+    (p) => p.name.toUpperCase().includes('BOLHA') || p.sku?.toUpperCase().includes('BOLHA'),
+  )
+  const bubbleWrapOption: PackagingOption | null = bubbleWrapInsumo
+    ? {
+        id: bubbleWrapInsumo.product_id,
+        name: bubbleWrapInsumo.name,
+        sku: bubbleWrapInsumo.sku,
+        unit_cost: bubbleWrapInsumo.unit_cost,
+        stock_balance: bubbleWrapInsumo.stock_balance,
+      }
+    : null
+
+  const bubbleProducts: BubbleWrapProductItem[] = saleProducts.map((p) => ({
+    id: p.product_id,
+    name: p.name,
+    sku: p.sku,
+    category: p.category,
+    sale_price: p.sale_price,
+    unit_cost: p.unit_cost,
+    packaging_cost: p.packaging_cost,
+    linked_packaging_name: p.linked_packaging_name,
+    linked_packaging_sku: p.linked_packaging_sku,
+    linked_packaging_unit_cost: p.linked_packaging_unit_cost,
+    use_bubble_wrap: p.use_bubble_wrap,
+    linked_bubble_wrap_qty: p.linked_bubble_wrap_qty,
   }))
 
   const linkableProducts = saleProducts.map((prod) => ({
@@ -96,6 +125,11 @@ export default async function ProductsPage() {
               <Calculator className="size-3.5 text-amber-600" />
               Planilha de Precificação (ML)
             </Link>
+            <BubbleWrapLinkDialog
+              products={bubbleProducts}
+              bubbleWrapInsumo={bubbleWrapOption}
+              triggerLabel="🫧 Plástico Bolha"
+            />
             <OlistPullButton />
             <PackagingLinkDialog
               products={linkableProducts}
@@ -300,6 +334,14 @@ export default async function ProductsPage() {
                             Sacola: {product.linked_packaging_name} (
                             {formatNumber(product.linked_packaging_qty ?? 1)}x)
                           </Link>
+                        ) : null}
+                        {product.use_bubble_wrap ? (
+                          <div className="flex items-center gap-1 font-semibold text-sky-700 dark:text-sky-300">
+                            <span>🫧 Plástico Bolha</span>
+                            <span className="text-[10px] text-muted-foreground font-normal">
+                              (+{formatCurrency(num(product.linked_bubble_wrap_unit_cost) || 0.6)})
+                            </span>
+                          </div>
                         ) : null}
                       </div>
                     </TableCell>

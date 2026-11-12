@@ -5,11 +5,11 @@ export const ML_DEFAULT_CLASSIC_PERCENT = 14
 export const ML_DEFAULT_PREMIUM_PERCENT = 19
 export const ML_DEFAULT_TAX_PERCENT = 6
 export const ML_DEFAULT_BURN_MARGIN_PERCENT = 8
+export const ML_FIXED_FEE_BELOW_79 = 6.5
+export const ML_FREE_SHIPPING_THRESHOLD = 79.0
 
 export const ML_BANDED_FEES = [
-  { firstCents: 1, lastCents: 2899, fee: 6.25, label: 'Abaixo de R$ 29 (R$ 6,25)' },
-  { firstCents: 2900, lastCents: 4999, fee: 6.5, label: 'De R$ 29 a R$ 49,99 (R$ 6,50)' },
-  { firstCents: 5000, lastCents: 7899, fee: 6.75, label: 'De R$ 50 a R$ 78,99 (R$ 6,75)' },
+  { firstCents: 1, lastCents: 7899, fee: 6.5, label: 'Abaixo de R$ 79 (Taxa fixa R$ 6,50)' },
   { firstCents: 7900, lastCents: Infinity, fee: 0, label: 'A partir de R$ 79 (Isento de taxa fixa)' },
 ] as const
 
@@ -21,8 +21,10 @@ export function getMlFixedFeeByPrice(
     return { fee: 0, bandLabel: 'Sem taxa fixa' }
   }
   const cents = Math.round(price * 100)
-  const band = ML_BANDED_FEES.find((b) => cents <= b.lastCents) ?? ML_BANDED_FEES[3]
-  return { fee: band.fee, bandLabel: band.label }
+  if (cents >= 7900) {
+    return { fee: 0, bandLabel: 'A partir de R$ 79 (Isento de taxa fixa)' }
+  }
+  return { fee: 6.5, bandLabel: 'Abaixo de R$ 79 (Taxa fixa R$ 6,50)' }
 }
 
 export type MlSaleScenarioResult = {

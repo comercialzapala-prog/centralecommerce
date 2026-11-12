@@ -86,6 +86,16 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
   const linkedPkgId = strOrNull(raw.linked_packaging_product_id ?? raw.linkedPackagingProductId)
   const linkedPkgQty = intOrNull(raw.linked_packaging_qty ?? raw.linkedPackagingQty) ?? (linkedPkgId ? 1 : null)
 
+  const linkedBubbleId = strOrNull(raw.linked_bubble_wrap_product_id ?? raw.linkedBubbleWrapProductId)
+  const linkedBubbleQty =
+    intOrNull(raw.linked_bubble_wrap_qty ?? raw.linkedBubbleWrapQty) ?? (linkedBubbleId ? 1 : null)
+  const useBubbleWrap =
+    typeof raw.use_bubble_wrap === 'boolean'
+      ? raw.use_bubble_wrap
+      : typeof raw.useBubbleWrap === 'boolean'
+        ? raw.useBubbleWrap
+        : Boolean(linkedBubbleId)
+
   const rawMkt = num(raw.marketplace_percent ?? raw.marketplacePercent)
   const rawTax = num(raw.tax_percent ?? raw.taxPercent)
 
@@ -96,6 +106,9 @@ export function parseCatalogSpec(raw: Record<string, unknown> | null | undefined
         : undefined,
     linked_packaging_product_id: linkedPkgId,
     linked_packaging_qty: linkedPkgQty,
+    linked_bubble_wrap_product_id: linkedBubbleId,
+    linked_bubble_wrap_qty: linkedBubbleQty,
+    use_bubble_wrap: useBubbleWrap,
     asin: strOrNull(raw.asin),
     ean: strOrNull(raw.ean ?? raw.gtin),
     ncm: strOrNull(raw.ncm),
@@ -239,7 +252,17 @@ export async function enrichProducts(products: Product[]): Promise<Product[]> {
   })
 
   const byIdMap = new Map(baseEnriched.map((p) => [p.id, p]))
-  const insumoBags = baseEnriched.filter((p) => p.item_kind === 'INSUMO')
+  const insumoBags = baseEnriched.filter(
+    (p) =>
+      p.item_kind === 'INSUMO' &&
+      !p.name.toUpperCase().includes('BOLHA') &&
+      !p.sku?.toUpperCase().includes('BOLHA'),
+  )
+  const bubbleInsumo = baseEnriched.find(
+    (p) =>
+      p.item_kind === 'INSUMO' &&
+      (p.name.toUpperCase().includes('BOLHA') || p.sku?.toUpperCase().includes('BOLHA')),
+  )
 
   return baseEnriched.map((product) => {
     if (product.item_kind === 'INSUMO') {
@@ -273,10 +296,17 @@ export async function enrichProducts(products: Product[]): Promise<Product[]> {
 
     const pkgQty = Math.max(1, num(product.linked_packaging_qty ?? 1))
     const linkedUnitCost = pkgProd ? num(pkgProd.unit_cost) : est.recommendedBag.defaultCost
+    const bagCost = round2(linkedUnitCost * pkgQty)
+
+    const useBubbleWrap = Boolean(product.use_bubble_wrap)
+    const bubbleQty = Math.max(1, num(product.linked_bubble_wrap_qty ?? 1))
+    const bubbleUnitCost = bubbleInsumo ? num(bubbleInsumo.unit_cost) : 0.6
+    const bubbleCost = useBubbleWrap ? round2(bubbleUnitCost * bubbleQty) : 0
+
     const effectivePackagingCost =
       num(product.packaging_cost) > 0
         ? num(product.packaging_cost)
-        : round2(linkedUnitCost * pkgQty)
+        : round2(bagCost + bubbleCost)
 
     return {
       ...product,
@@ -286,6 +316,14 @@ export async function enrichProducts(products: Product[]): Promise<Product[]> {
       linked_packaging_name: pkgProd?.name ?? est.recommendedBag.name,
       linked_packaging_sku: pkgProd?.sku ?? est.recommendedBag.code,
       linked_packaging_unit_cost: linkedUnitCost,
+      use_bubble_wrap: useBubbleWrap,
+      linked_bubble_wrap_product_id: useBubbleWrap
+        ? product.linked_bubble_wrap_product_id ?? bubbleInsumo?.id ?? null
+        : null,
+      linked_bubble_wrap_name: bubbleInsumo?.name ?? 'PLASTICO BOLHA',
+      linked_bubble_wrap_sku: bubbleInsumo?.sku ?? 'BOLHA',
+      linked_bubble_wrap_unit_cost: bubbleUnitCost,
+      linked_bubble_wrap_qty: bubbleQty,
     }
   })
 }
@@ -373,7 +411,17 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
   })
 
   const statsById = new Map<string, ProductStats>(allStats.map((r) => [r.product_id, r]))
-  const insumoBagStats = allStats.filter((r) => r.item_kind === 'INSUMO')
+  const insumoBagStats = allStats.filter(
+    (r) =>
+      r.item_kind === 'INSUMO' &&
+      !r.name.toUpperCase().includes('BOLHA') &&
+      !r.sku?.toUpperCase().includes('BOLHA'),
+  )
+  const bubbleWrapInsumo = allStats.find(
+    (r) =>
+      r.item_kind === 'INSUMO' &&
+      (r.name.toUpperCase().includes('BOLHA') || r.sku?.toUpperCase().includes('BOLHA')),
+  )
 
   // Auto-preenche vínculo de sacola quando o produto ainda não tem sacola vinculada
   for (const prod of allStats) {
@@ -446,6 +494,34 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
     const list = consumptionByPackagingId.get(pkgId) ?? []
     list.push(entry)
     consumptionByPackagingId.set(pkgId, list)
+
+    // Consumo de plástico bolha quando o produto usa proteção
+    if (prod.use_bubble_wrap && bubbleWrapInsumo) {
+      const bubbleWrapId = bubbleWrapInsumo.product_id
+      const bubbleQtyPerUnit = Math.max(1, num(prod.linked_bubble_wrap_qty ?? 1))
+      const bubblePairKey = `${prod.product_id}::${bubbleWrapId}`
+      const recordedBubbleQty = recordedPkgByPair.get(bubblePairKey) ?? 0
+      const bubbleQtyConsumed = Math.max(recordedBubbleQty, unitsSold * bubbleQtyPerUnit)
+      const bubbleUnitCost = num(bubbleWrapInsumo.unit_cost) || 0.6
+      const bubbleTotalCost = round2(bubbleQtyConsumed * bubbleUnitCost)
+
+      const bubbleEntry: PackagingConsumptionByProduct = {
+        product_id: prod.product_id,
+        product_name: prod.name,
+        product_sku: prod.sku,
+        packaging_product_id: bubbleWrapId,
+        packaging_name: bubbleWrapInsumo.name,
+        packaging_sku: bubbleWrapInsumo.sku,
+        qty_per_unit: bubbleQtyPerUnit,
+        units_sold: unitsSold,
+        qty_consumed: bubbleQtyConsumed,
+        unit_cost: bubbleUnitCost,
+        total_cost: bubbleTotalCost,
+      }
+      const bubbleList = consumptionByPackagingId.get(bubbleWrapId) ?? []
+      bubbleList.push(bubbleEntry)
+      consumptionByPackagingId.set(bubbleWrapId, bubbleList)
+    }
   }
 
   const salesByProduct = new Map<string, SalesFactRow[]>()
@@ -462,14 +538,18 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
     const pkgStat = pkgId ? statsById.get(pkgId) : undefined
     const pkgQtyPerUnit = Math.max(1, num(row.linked_packaging_qty ?? 1))
     const linkedPkgUnitCost = pkgStat ? num(pkgStat.unit_cost) : 0
+    const bagCost = pkgStat ? round2(linkedPkgUnitCost * pkgQtyPerUnit) : 0
+
+    const useBubbleWrap = Boolean(row.use_bubble_wrap)
+    const bubbleQty = Math.max(1, num(row.linked_bubble_wrap_qty ?? 1))
+    const bubbleUnitCost = bubbleWrapInsumo ? num(bubbleWrapInsumo.unit_cost) : 0.6
+    const bubbleCost = useBubbleWrap ? round2(bubbleUnitCost * bubbleQty) : 0
 
     const unitShipping = num(row.shipping_cost)
     const unitPackaging =
       num(row.packaging_cost) > 0
         ? num(row.packaging_cost)
-        : pkgStat
-          ? round2(linkedPkgUnitCost * pkgQtyPerUnit)
-          : 0
+        : round2(bagCost + bubbleCost)
     const mktPercent = num(row.marketplace_percent)
     const taxPercent = num(row.tax_percent)
 
@@ -534,6 +614,15 @@ export async function enrichProductStats(rows: ProductStats[]): Promise<ProductS
       linked_packaging_sku: pkgStat?.sku ?? null,
       linked_packaging_unit_cost: linkedPkgUnitCost,
       linked_packaging_stock: pkgStat ? num(pkgStat.stock_balance) : undefined,
+      use_bubble_wrap: useBubbleWrap,
+      linked_bubble_wrap_product_id: useBubbleWrap
+        ? (row.linked_bubble_wrap_product_id ?? bubbleWrapInsumo?.product_id ?? null)
+        : null,
+      linked_bubble_wrap_name: bubbleWrapInsumo?.name ?? 'PLASTICO BOLHA',
+      linked_bubble_wrap_sku: bubbleWrapInsumo?.sku ?? 'BOLHA',
+      linked_bubble_wrap_unit_cost: bubbleUnitCost,
+      linked_bubble_wrap_stock: bubbleWrapInsumo ? num(bubbleWrapInsumo.stock_balance) : undefined,
+      linked_bubble_wrap_qty: bubbleQty,
       packaging_qty_consumed: isInsumo
         ? insumoQtyConsumed
         : (prodConsumption?.qty_consumed ?? 0),
@@ -577,6 +666,29 @@ export async function saveProductCatalogSpec(
       ? spec.linked_packaging_qty
       : intOrNull(prevData.linked_packaging_qty) ?? (linkedPkgId ? 1 : null)
 
+  const linkedBubbleId =
+    spec.linked_bubble_wrap_product_id !== undefined
+      ? spec.linked_bubble_wrap_product_id
+      : strOrNull(prevData.linked_bubble_wrap_product_id)
+
+  const linkedBubbleQty =
+    spec.linked_bubble_wrap_qty !== undefined
+      ? spec.linked_bubble_wrap_qty
+      : intOrNull(prevData.linked_bubble_wrap_qty) ?? (linkedBubbleId ? 1 : null)
+
+  const useBubbleWrap =
+    spec.use_bubble_wrap !== undefined
+      ? Boolean(spec.use_bubble_wrap)
+      : typeof prevData.use_bubble_wrap === 'boolean'
+        ? prevData.use_bubble_wrap
+        : Boolean(linkedBubbleId)
+
+  const defaultBubbleId = 'f1496437-530f-48fd-957b-69190ff4ce1b'
+  const resolvedBubbleId = useBubbleWrap
+    ? (linkedBubbleId || defaultBubbleId)
+    : null
+  const resolvedBubbleQty = resolvedBubbleId ? (linkedBubbleQty ?? 1) : null
+
   const mergedData: Record<string, unknown> = {
     ...prevData,
     productId,
@@ -585,6 +697,9 @@ export async function saveProductCatalogSpec(
       spec.item_kind !== undefined ? spec.item_kind : (prevData.item_kind ?? 'PRODUTO'),
     linked_packaging_product_id: linkedPkgId ?? null,
     linked_packaging_qty: linkedPkgId ? (linkedPkgQty ?? 1) : null,
+    linked_bubble_wrap_product_id: resolvedBubbleId,
+    linked_bubble_wrap_qty: resolvedBubbleQty,
+    use_bubble_wrap: Boolean(useBubbleWrap && resolvedBubbleId),
     asin: spec.asin !== undefined ? spec.asin : (prevData.asin ?? null),
     ean: spec.ean !== undefined ? spec.ean : (prevData.ean ?? null),
     gtin: spec.ean !== undefined ? spec.ean : (prevData.gtin ?? null),

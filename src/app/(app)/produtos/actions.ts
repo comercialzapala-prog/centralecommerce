@@ -103,11 +103,22 @@ function readCatalogSpec(formData: FormData): ProductCatalogSpec {
     'linked_packaging_qty',
     'Qtd. de sacolas por unidade',
   )
+  const useBubbleWrap = readBoolean(formData, 'use_bubble_wrap')
+  const linkedBubbleId = readUuid(formData, 'linked_bubble_wrap_product_id')
+  const linkedBubbleQty = readOptionalInt(
+    formData,
+    'linked_bubble_wrap_qty',
+    'Qtd. de plástico bolha por unidade',
+  )
 
   return {
     item_kind: itemKind,
     linked_packaging_product_id: itemKind === 'INSUMO' ? null : linkedPkgId,
     linked_packaging_qty: itemKind === 'INSUMO' || !linkedPkgId ? null : Math.max(1, linkedPkgQty ?? 1),
+    use_bubble_wrap: itemKind === 'INSUMO' ? false : useBubbleWrap,
+    linked_bubble_wrap_product_id: itemKind === 'INSUMO' || !useBubbleWrap ? null : linkedBubbleId,
+    linked_bubble_wrap_qty:
+      itemKind === 'INSUMO' || !useBubbleWrap ? null : Math.max(1, linkedBubbleQty ?? 1),
     asin: readText(formData, 'asin'),
     ean: readText(formData, 'ean'),
     ncm: readText(formData, 'ncm'),
@@ -275,6 +286,9 @@ export async function saveProductPricingAction(input: {
   taxPercent: number
   linkedPackagingProductId?: string | null
   linkedPackagingQty?: number | null
+  useBubbleWrap?: boolean | null
+  linkedBubbleWrapProductId?: string | null
+  linkedBubbleWrapQty?: number | null
   grossWeightGrams?: number | null
   lengthCm?: number | null
   widthCm?: number | null
@@ -333,6 +347,11 @@ export async function saveProductPricingAction(input: {
       length_cm: input.lengthCm !== undefined ? input.lengthCm : undefined,
       width_cm: input.widthCm !== undefined ? input.widthCm : undefined,
       height_cm: input.heightCm !== undefined ? input.heightCm : undefined,
+      use_bubble_wrap: input.useBubbleWrap !== undefined ? input.useBubbleWrap : undefined,
+      linked_bubble_wrap_product_id:
+        input.linkedBubbleWrapProductId !== undefined ? input.linkedBubbleWrapProductId : undefined,
+      linked_bubble_wrap_qty:
+        input.linkedBubbleWrapQty !== undefined ? input.linkedBubbleWrapQty : undefined,
       monthly_cmv_track: input.monthlyTrack !== undefined ? input.monthlyTrack : undefined,
     })
 
@@ -625,4 +644,45 @@ export async function createProductFromSimulationAction(input: {
       message: err instanceof Error ? err.message : 'Erro ao cadastrar produto simulado.',
     }
   }
+}
+
+export async function batchAssignBubbleWrapAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  return runAction(async () => {
+    const bubbleWrapId =
+      readText(formData, 'bubble_wrap_product_id') || 'f1496437-530f-48fd-957b-69190ff4ce1b'
+    const rawSelected = formData
+      .getAll('selected_product_ids')
+      .map((v) => String(v).trim())
+      .filter(Boolean)
+    const selectedSet = new Set(rawSelected)
+
+    const rawAll = formData
+      .getAll('all_candidate_product_ids')
+      .map((v) => String(v).trim())
+      .filter(Boolean)
+
+    const tasks: Promise<void>[] = []
+    for (const prodId of rawAll) {
+      const isSelected = selectedSet.has(prodId)
+      tasks.push(
+        saveProductCatalogSpec(prodId, null, {
+          use_bubble_wrap: isSelected,
+          linked_bubble_wrap_product_id: isSelected ? bubbleWrapId : null,
+          linked_bubble_wrap_qty: isSelected ? 1 : null,
+        }),
+      )
+    }
+
+    if (tasks.length > 0) {
+      await Promise.all(tasks)
+    }
+
+    revalidateProducts()
+    return actionOk(
+      `Vínculo de Plástico Bolha atualizado! ${selectedSet.size} produto(s) configurado(s) com proteção extra.`,
+    )
+  })
 }

@@ -130,6 +130,9 @@ export function ProductPricingDialog({
   const [includeMlFixedFee, setIncludeMlFixedFee] = useState<boolean>(() =>
     product.include_ml_fixed_fee !== undefined ? Boolean(product.include_ml_fixed_fee) : true,
   )
+  const [useBubbleWrap, setUseBubbleWrap] = useState<boolean>(() => Boolean(product.use_bubble_wrap))
+  const bubbleUnitCost =
+    num(product.linked_bubble_wrap_unit_cost) > 0 ? num(product.linked_bubble_wrap_unit_cost) : 0.6
 
   // Sacola selecionada
   const [selectedBagId, setSelectedBagId] = useState<string>(() => {
@@ -190,6 +193,7 @@ export function ProductPricingDialog({
       setIncludeMlFixedFee(
         product.include_ml_fixed_fee !== undefined ? Boolean(product.include_ml_fixed_fee) : true,
       )
+      setUseBubbleWrap(Boolean(product.use_bubble_wrap))
       if (product.linked_packaging_product_id) {
         setSelectedBagId(product.linked_packaging_product_id)
       }
@@ -273,13 +277,23 @@ export function ProductPricingDialog({
         (dbBag?.name ?? '').toUpperCase().includes(p.code.replace('SAC-', 'SACOLA ')),
     )
     const unitBagCost =
-      dbBag && num(dbBag.unit_cost) > 0 ? num(dbBag.unit_cost) : presetBag?.defaultCost ?? packagingCost
-    setPackagingCost(round2(unitBagCost * Math.max(1, linkedBagQty)))
+      dbBag && num(dbBag.unit_cost) > 0 ? num(dbBag.unit_cost) : presetBag?.defaultCost ?? 0.28
+    const baseBagTotal = round2(unitBagCost * Math.max(1, linkedBagQty))
+    const totalWithBubble = round2(baseBagTotal + (useBubbleWrap ? bubbleUnitCost : 0))
+    setPackagingCost(totalWithBubble)
     if (presetBag) {
       setLengthCm(presetBag.lengthCm)
       setWidthCm(presetBag.widthCm)
       setHeightCm(presetBag.heightCm)
     }
+  }
+
+  function handleToggleBubbleWrap(checked: boolean) {
+    setUseBubbleWrap(checked)
+    setPackagingCost((prev) => {
+      const diff = checked ? bubbleUnitCost : -bubbleUnitCost
+      return Math.max(0, round2(prev + diff))
+    })
   }
 
   function handleBackdropClick() {
@@ -319,6 +333,11 @@ export function ProductPricingDialog({
         taxPercent,
         linkedPackagingProductId: resolvedDbBag ? resolvedDbBag.id : product.linked_packaging_product_id,
         linkedPackagingQty: linkedBagQty,
+        useBubbleWrap,
+        linkedBubbleWrapProductId: useBubbleWrap
+          ? product.linked_bubble_wrap_product_id ?? 'f1496437-530f-48fd-957b-69190ff4ce1b'
+          : null,
+        linkedBubbleWrapQty: useBubbleWrap ? 1 : null,
         grossWeightGrams,
         lengthCm,
         widthCm,
@@ -744,17 +763,39 @@ export function ProductPricingDialog({
                       </td>
                     </tr>
 
-                    {/* Sacola / Embalagem */}
+                    {/* Sacola / Embalagem de Envio */}
                     <tr>
                       <th className="px-3.5 py-1.5 text-left font-sans font-normal text-muted-foreground">
-                        (-) Sacola / Embalagem
+                        (-) Sacola de Envio
                       </th>
-                      <td className="px-3.5 py-1.5 text-right text-rose-600">-{formatCurrency(packagingCost)}</td>
-                      <td className="px-3.5 py-1.5 text-right text-rose-600">-{formatCurrency(packagingCost)}</td>
+                      <td className="px-3.5 py-1.5 text-right text-rose-600">
+                        -{formatCurrency(round2(Math.max(0, packagingCost - (useBubbleWrap ? bubbleUnitCost : 0))))}
+                      </td>
+                      <td className="px-3.5 py-1.5 text-right text-rose-600">
+                        -{formatCurrency(round2(Math.max(0, packagingCost - (useBubbleWrap ? bubbleUnitCost : 0))))}
+                      </td>
                       <td className="px-3.5 py-1.5 text-left font-sans text-[11px] text-muted-foreground hidden sm:table-cell">
                         Sacola vinculada ({initialEst.recommendedBag.name})
                       </td>
                     </tr>
+
+                    {/* Proteção / Plástico Bolha */}
+                    {useBubbleWrap && (
+                      <tr className="bg-sky-500/5">
+                        <th className="px-3.5 py-1.5 text-left font-sans font-medium text-sky-900 dark:text-sky-200">
+                          (-) Plástico Bolha (Proteção Extra)
+                        </th>
+                        <td className="px-3.5 py-1.5 text-right text-rose-600 font-medium">
+                          -{formatCurrency(bubbleUnitCost)}
+                        </td>
+                        <td className="px-3.5 py-1.5 text-right text-rose-600 font-medium">
+                          -{formatCurrency(bubbleUnitCost)}
+                        </td>
+                        <td className="px-3.5 py-1.5 text-left font-sans text-[11px] text-sky-800 dark:text-sky-300 hidden sm:table-cell">
+                          Proteção contra quebra/avaria (1 un. por produto)
+                        </td>
+                      </tr>
+                    )}
 
                     {/* Perda / Quebra */}
                     {lossPercent > 0 && (
@@ -931,8 +972,17 @@ export function ProductPricingDialog({
                   />
                 </div>
 
-                <div className="flex flex-col justify-end">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-medium pb-1.5">
+                <div className="flex flex-col justify-end space-y-1 pb-1">
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-semibold text-sky-800 dark:text-sky-300">
+                    <input
+                      type="checkbox"
+                      checked={useBubbleWrap}
+                      onChange={(e) => handleToggleBubbleWrap(e.target.checked)}
+                      className="size-4 rounded accent-sky-600"
+                    />
+                    <span>🫧 Plástico Bolha (+{formatCurrency(bubbleUnitCost)})</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-muted-foreground">
                     <input
                       type="checkbox"
                       checked={includeMlFixedFee}

@@ -218,6 +218,9 @@ export type ProductCatalogSpec = {
   item_kind?: ProductItemKind | null
   linked_packaging_product_id?: string | null
   linked_packaging_qty?: number | null
+  linked_bubble_wrap_product_id?: string | null
+  linked_bubble_wrap_qty?: number | null
+  use_bubble_wrap?: boolean | null
   asin?: string | null
   ean?: string | null
   ncm?: string | null
@@ -274,6 +277,9 @@ export type Product = {
   linked_packaging_name?: string | null
   linked_packaging_sku?: string | null
   linked_packaging_unit_cost?: number
+  linked_bubble_wrap_name?: string | null
+  linked_bubble_wrap_sku?: string | null
+  linked_bubble_wrap_unit_cost?: number
 } & ProductCatalogSpec
 
 /** Linha da view `v_product_stats` enriquecida com ficha técnica, sacolas vinculadas e frete/taxas acumulados. */
@@ -308,6 +314,10 @@ export type ProductStats = {
   linked_packaging_sku?: string | null
   linked_packaging_unit_cost?: number
   linked_packaging_stock?: number
+  linked_bubble_wrap_name?: string | null
+  linked_bubble_wrap_sku?: string | null
+  linked_bubble_wrap_unit_cost?: number
+  linked_bubble_wrap_stock?: number
   packaging_qty_consumed?: number
   packaging_linked_cost_total?: number
   consumption_by_product?: PackagingConsumptionByProduct[]
